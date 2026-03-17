@@ -287,6 +287,93 @@ python3 scripts/google_weather.py \
 
 ---
 
+## 系统认知 Cron
+
+项目现在提供两类后台系统任务入口，它们是系统框架命令，不是用户发言。
+
+### Cron A: 10 分钟记忆提炼
+
+用途：
+
+- 每 10 分钟触发一次
+- 只有最近 10 分钟内确实有会话活动时才继续
+- 它会进入已有 Codex 会话，对最近窗口内的对话进行审视
+- 提炼值得纳入长期记忆的：
+  - 事实
+  - 实体
+  - 意图
+- 并把这些内容写入 Neo4j
+
+运行：
+
+```bash
+python3 scripts/run_cron_memory_extraction.py
+```
+
+可选：
+
+```bash
+python3 scripts/run_cron_memory_extraction.py --window-minutes 10 --log-dir var/system_task_logs
+```
+
+### Cron B: 4 小时睡眠整理
+
+用途：
+
+- 每 4 小时触发一次
+- 只有过去 4 小时内确实发生过成功的 Cron A 时才继续
+- 它会围绕最近 4 小时的记忆活动做阶段性整理：
+  - 整理
+  - 合并
+  - 重估
+  - 删减
+  - 调整置信度
+  - 更新实体状态
+- 必要时可使用 Neo4j / GDS
+- 会留下完整日志
+- 并生成一段内部“感知和洞察”，再注入回用户会话上下文
+
+运行：
+
+```bash
+python3 scripts/run_cron_memory_consolidation.py
+```
+
+可选：
+
+```bash
+python3 scripts/run_cron_memory_consolidation.py --window-hours 4 --log-dir var/system_task_logs
+```
+
+### 日志与记录
+
+- SQLite 会保存 `system_task_runs`
+- 两类 cron 都会先尝试获取 SQLite 任务锁，避免同类任务重叠执行
+- 即使因为“无活动”或“已有同类任务运行中”而跳过，也会单独落一份 batch log
+- 本地日志默认写入：
+
+```text
+var/system_task_logs/
+```
+
+- 单次 session run log 会记录：
+  - 任务类型
+  - 会话路由信息
+  - 时间窗口
+  - 注入给 Codex 的完整 context
+  - 发给 Codex 的完整 prompt
+  - 返回 summary
+  - 错误细节
+- 每次批处理还会生成单独的 batch log，记录：
+  - 是否 skipped
+  - skipped 原因
+  - 命中的 run 数
+  - 每个 run 的 `task_run_id`、`session_key`、状态、log 路径
+- 这些任务不会被当作用户消息处理
+- 这些任务是系统框架命令，不是用户发言
+
+---
+
 ## 运行方式
 
 当前回复链路不是简单 echo，而是：

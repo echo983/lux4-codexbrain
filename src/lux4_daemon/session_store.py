@@ -7,7 +7,7 @@ import uuid
 from contextlib import closing
 from datetime import UTC, datetime
 
-from .models import ConversationSession, IncomingMessage, OutboxMessage
+from .models import ConversationSession, IncomingMessage, OutboxMessage, SystemTaskLock, SystemTaskRun
 
 
 class SessionStore:
@@ -71,6 +71,29 @@ class SessionStore:
                         status TEXT NOT NULL DEFAULT 'pending',
                         failure_detail TEXT NOT NULL DEFAULT '',
                         FOREIGN KEY(session_key) REFERENCES sessions(session_key)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS system_task_runs (
+                        task_run_id TEXT PRIMARY KEY,
+                        task_type TEXT NOT NULL,
+                        session_key TEXT NOT NULL,
+                        window_started_at TEXT NOT NULL,
+                        window_ended_at TEXT NOT NULL,
+                        started_at TEXT NOT NULL,
+                        completed_at TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        codex_session_id TEXT,
+                        log_path TEXT,
+                        summary TEXT NOT NULL DEFAULT '',
+                        error_detail TEXT NOT NULL DEFAULT '',
+                        FOREIGN KEY(session_key) REFERENCES sessions(session_key)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS system_task_locks (
+                        task_type TEXT PRIMARY KEY,
+                        owner_id TEXT NOT NULL,
+                        acquired_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL
                     );
                     """
                 )
@@ -420,6 +443,233 @@ class SessionStore:
             return None
         return _outbox_from_row(row)
 
+    def get_recently_active_sessions(self, *, since: datetime) -> list[ConversationSession]:
+        cutoff = since.astimezone(UTC)
+        with self._lock, closing(self._connect()) as connection:
+            session_keys = [
+                row["session_key"]
+                for row in connection.execute(
+                    """
+                    SELECT session_key, MAX(created_at) AS latest_created_at
+                    FROM messages
+                    GROUP BY session_key
+                    ORDER BY latest_created_at DESC
+                    """
+                ).fetchall()
+                if _parse_iso8601(row["latest_created_at"]) >= cutoff
+            ]
+        sessions: list[ConversationSession] = []
+        for session_key in session_keys:
+            session = self.get_session(session_key)
+            if session is not None:
+                sessions.append(session)
+        return sessions
+
+    def get_recent_messages(self, session_key: str, *, since: datetime) -> list[dict[str, str]]:
+        cutoff = since.astimezone(UTC)
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT message_id, direction, text, created_at
+                FROM messages
+                WHERE session_key = ?
+                ORDER BY created_at ASC
+                """,
+                (session_key,),
+            ).fetchall()
+        messages = []
+        for row in rows:
+            created_at = _parse_iso8601(row["created_at"])
+            if created_at < cutoff:
+                continue
+            messages.append(
+                {
+                    "message_id": row["message_id"],
+                    "direction": row["direction"],
+                    "text": row["text"],
+                    "created_at": row["created_at"],
+                }
+            )
+        return messages
+
+    def record_system_task_run(
+        self,
+        *,
+        task_type: str,
+        session_key: str,
+        window_started_at: str,
+        window_ended_at: str,
+        started_at: str,
+        completed_at: str,
+        status: str,
+        codex_session_id: str | None,
+        log_path: str | None,
+        summary: str,
+        error_detail: str = "",
+    ) -> SystemTaskRun:
+        task_run_id = uuid.uuid4().hex
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO system_task_runs (
+                        task_run_id,
+                        task_type,
+                        session_key,
+                        window_started_at,
+                        window_ended_at,
+                        started_at,
+                        completed_at,
+                        status,
+                        codex_session_id,
+                        log_path,
+                        summary,
+                        error_detail
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task_run_id,
+                        task_type,
+                        session_key,
+                        window_started_at,
+                        window_ended_at,
+                        started_at,
+                        completed_at,
+                        status,
+                        codex_session_id,
+                        log_path,
+                        summary,
+                        error_detail,
+                    ),
+                )
+        run = self.get_system_task_run(task_run_id)
+        if run is None:
+            raise RuntimeError(f"failed to load system task run after insert: {task_run_id}")
+        return run
+
+    def get_system_task_run(self, task_run_id: str) -> SystemTaskRun | None:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    task_run_id,
+                    task_type,
+                    session_key,
+                    window_started_at,
+                    window_ended_at,
+                    started_at,
+                    completed_at,
+                    status,
+                    codex_session_id,
+                    log_path,
+                    summary,
+                    error_detail
+                FROM system_task_runs
+                WHERE task_run_id = ?
+                """,
+                (task_run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _system_task_run_from_row(row)
+
+    def get_recent_system_task_runs(self, *, task_type: str, since: datetime, status: str | None = None) -> list[SystemTaskRun]:
+        cutoff = since.astimezone(UTC)
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    task_run_id,
+                    task_type,
+                    session_key,
+                    window_started_at,
+                    window_ended_at,
+                    started_at,
+                    completed_at,
+                    status,
+                    codex_session_id,
+                    log_path,
+                    summary,
+                    error_detail
+                FROM system_task_runs
+                WHERE task_type = ?
+                ORDER BY started_at DESC
+                """,
+                (task_type,),
+            ).fetchall()
+        runs = []
+        for row in rows:
+            started_at = _parse_iso8601(row["started_at"])
+            if started_at < cutoff:
+                continue
+            if status is not None and row["status"] != status:
+                continue
+            runs.append(_system_task_run_from_row(row))
+        return runs
+
+    def acquire_system_task_lock(
+        self,
+        *,
+        task_type: str,
+        owner_id: str,
+        expires_at: str,
+    ) -> bool:
+        now = _utc_now()
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                existing = connection.execute(
+                    """
+                    SELECT task_type, owner_id, acquired_at, expires_at
+                    FROM system_task_locks
+                    WHERE task_type = ?
+                    """,
+                    (task_type,),
+                ).fetchone()
+                if existing is not None and _parse_iso8601(existing["expires_at"]) > _parse_iso8601(now):
+                    return False
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO system_task_locks (
+                        task_type,
+                        owner_id,
+                        acquired_at,
+                        expires_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (task_type, owner_id, now, expires_at),
+                )
+        return True
+
+    def release_system_task_lock(self, *, task_type: str, owner_id: str) -> None:
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    DELETE FROM system_task_locks
+                    WHERE task_type = ? AND owner_id = ?
+                    """,
+                    (task_type, owner_id),
+                )
+
+    def get_system_task_lock(self, task_type: str) -> SystemTaskLock | None:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT task_type, owner_id, acquired_at, expires_at
+                FROM system_task_locks
+                WHERE task_type = ?
+                """,
+                (task_type,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SystemTaskLock(
+            task_type=row["task_type"],
+            owner_id=row["owner_id"],
+            acquired_at=row["acquired_at"],
+            expires_at=row["expires_at"],
+        )
+
 
 def _session_from_row(row: sqlite3.Row) -> ConversationSession:
     return ConversationSession(
@@ -454,5 +704,32 @@ def _outbox_from_row(row: sqlite3.Row) -> OutboxMessage:
     )
 
 
+def _system_task_run_from_row(row: sqlite3.Row) -> SystemTaskRun:
+    return SystemTaskRun(
+        task_run_id=row["task_run_id"],
+        task_type=row["task_type"],
+        session_key=row["session_key"],
+        window_started_at=row["window_started_at"],
+        window_ended_at=row["window_ended_at"],
+        started_at=row["started_at"],
+        completed_at=row["completed_at"],
+        status=row["status"],
+        codex_session_id=row["codex_session_id"],
+        log_path=row["log_path"],
+        summary=row["summary"],
+        error_detail=row["error_detail"],
+    )
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _parse_iso8601(value: str) -> datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

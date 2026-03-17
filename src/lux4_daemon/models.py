@@ -50,6 +50,30 @@ class OutboxMessage:
 
 
 @dataclass(frozen=True)
+class SystemTaskRun:
+    task_run_id: str
+    task_type: str
+    session_key: str
+    window_started_at: str
+    window_ended_at: str
+    started_at: str
+    completed_at: str
+    status: str
+    codex_session_id: str | None
+    log_path: str | None
+    summary: str
+    error_detail: str
+
+
+@dataclass(frozen=True)
+class SystemTaskLock:
+    task_type: str
+    owner_id: str
+    acquired_at: str
+    expires_at: str
+
+
+@dataclass(frozen=True)
 class ConversationSession:
     session_key: str
     source: str

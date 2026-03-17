@@ -9,7 +9,7 @@
 3. 生成回复。
 4. 将回复按统一结构推送到上游配置的 reply queue 接口。
 
-当前是第一阶段实现，回复逻辑为 `echo`，即用户发什么，就回什么。
+当前版本已经接入 `codex exec`，并支持按用户会话续接已有 Codex session。
 
 ---
 
@@ -19,9 +19,11 @@
 - 已实现消息标准化，兼容参考项目中的 `incoming_message` 结构
 - 已实现异步后台处理
 - 已实现本地 SQLite 会话记录
+- 已实现基于 `codex exec` 的回复生成
+- 已实现本地会话到 Codex session id 的续接
 - 已实现 reply 出站推送
 - reply 出站目标固定为 Cloudflare Queue push API
-- 当前回复策略：原样 echo
+- 助手行为由项目根目录 [AGENT.md](/root/lux4-codexbrain/AGENT.md) 约束
 
 ---
 
@@ -31,6 +33,7 @@
 LUX4_CF_ACCOUNT_ID='your-account-id' \
 LUX4_CF_QUEUE_ID='your-queue-id' \
 LUX4_CF_API_TOKEN='your-api-token' \
+CODEX_API_KEY='your-codex-api-key' \
 PYTHONPATH=src python3 -m lux4_daemon
 ```
 
@@ -40,6 +43,7 @@ PYTHONPATH=src python3 -m lux4_daemon
 LUX4_CF_ACCOUNT_ID=your-account-id
 LUX4_CF_QUEUE_ID=your-queue-id
 LUX4_CF_API_TOKEN=your-api-token
+CODEX_API_KEY=your-codex-api-key
 LUX4_PORT=18473
 ```
 
@@ -71,6 +75,10 @@ PYTHONPATH=src python3 -m lux4_daemon
 | `LUX4_CF_ACCOUNT_ID` | 无 | Cloudflare Account ID |
 | `LUX4_CF_QUEUE_ID` | 无 | Cloudflare Queue ID |
 | `LUX4_CF_API_TOKEN` | 无 | Cloudflare API Token，需有队列写权限 |
+| `LUX4_CODEX_BINARY` | `codex` | Codex CLI 可执行文件路径 |
+| `LUX4_CODEX_MODEL` | 空 | 可选，显式指定 Codex model |
+| `LUX4_CODEX_TIMEOUT_SECONDS` | `120` | 单次 Codex 调用超时 |
+| `CODEX_API_KEY` | 无 | Codex API key，会透传给 `codex exec` |
 | `LUX4_REQUEST_TIMEOUT_SECONDS` | `10` | reply 出站 HTTP 超时秒数 |
 
 说明：
@@ -78,6 +86,50 @@ PYTHONPATH=src python3 -m lux4_daemon
 - `LUX4_CF_ACCOUNT_ID`、`LUX4_CF_QUEUE_ID`、`LUX4_CF_API_TOKEN` 是启动必需项。
 - 缺少任意一个时，daemon 会在启动时直接报错退出，不会进入“只接收入站不发 reply”的半工作状态。
 - `.env` 文件只补充缺失项，不覆盖已经存在的进程环境变量。
+- 如果本机没有可复用的 Codex 登录态，建议显式配置 `CODEX_API_KEY`。
+
+---
+
+## 运行方式
+
+当前回复链路不是简单 echo，而是：
+
+1. daemon 收到入站消息
+2. 用 `source + site_url + room_id + sender_user_id` 定位本地会话
+3. 如果没有现有 Codex session，则执行新的 `codex exec`
+4. 如果已有 Codex session，则执行 `codex exec resume <SESSION_ID>`
+5. 将最新 `thread_id` 回写到本地 SQLite
+6. 将最终回复推送到 Cloudflare Queue
+
+本地数据库默认在：
+
+```text
+var/lux4_daemon.sqlite3
+```
+
+会话里会保存：
+
+- `session_key`
+- `active_codex_session_id`
+- `status`
+- `last_message_id`
+- `last_message_at`
+
+如果 `resume` 失败，daemon 会清掉旧的 Codex session id，并自动新建一轮会话。
+
+---
+
+## Codex 约束
+
+项目根目录的 [AGENT.md](/root/lux4-codexbrain/AGENT.md) 定义了统一的助手行为边界。
+
+核心约束包括：
+
+- 角色是 IM 助手，不是 coding agent
+- 只输出给最终用户的正文
+- 默认跟随用户语言
+- 不暴露内部实现、session id、Codex、Cloudflare、数据库和队列细节
+- 不编造已经执行的动作
 
 ---
 
@@ -141,7 +193,7 @@ curl -sS http://127.0.0.1:18473/healthz
 
 - 上游在收到用户 IM 消息后，将消息转发给本 daemon。
 - daemon 收到后立即返回 `202 Accepted`。
-- 真正的消息处理和 reply 推送在后台线程异步执行。
+- 真正的消息处理、Codex 会话续接和 reply 推送在后台线程异步执行。
 
 这意味着：
 
@@ -422,7 +474,7 @@ Authorization: Bearer <token>
 | `replyMode` | 当前固定为 `message` |
 | `text` | 要发送给用户的回复正文 |
 
-第一阶段里，`text` 与用户原始输入完全一致。
+当前版本里，`text` 是 Codex 生成的最终用户回复。
 
 ---
 
@@ -435,22 +487,23 @@ Authorization: Bearer <token>
 3. 上游调用 `POST /api/v1/messages/incoming`。
 4. 如果收到 `202 Accepted`，说明 daemon 已接受处理。
 5. daemon 在后台执行回复逻辑。
-6. daemon 把 `reply_message` 推送到 Cloudflare Queue。
-7. 上游 reply queue 消费者再把消息真正发回 IM 平台。
+6. daemon 用 `codex exec` 或 `codex exec resume` 生成回复。
+7. daemon 把 `reply_message` 推送到 Cloudflare Queue。
+8. 上游 reply queue 消费者再把消息真正发回 IM 平台。
 
 ---
 
 ## 当前行为边界
 
-这版是第一阶段最小实现，调用方需要知道下面几点：
+当前版本的行为边界如下：
 
 - 当前不会同步返回 reply 内容
 - 当前不会通过 HTTP 直接把最终结果回传给上游调用方
-- 当前回复逻辑只是 echo
+- 当前依赖本机可用的 `codex` CLI
 - 当前没有对重复 `messageId` 做严格幂等去重
 - 当前后台推送失败只写日志，不会自动回调上游
 
-这些都是下一阶段会继续补的内容。
+后续还会继续补更完整的恢复和观测能力。
 
 ---
 
@@ -464,7 +517,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 ## 下一阶段规划
 
-- 将 `echo` 替换为真正的 assistant reply 生成流程
-- 接入 `codex-cli`
-- 利用 `sessionKey` 续接历史会话
+- 增加更完整的多轮上下文装配
 - 增加幂等、重试、失败投递和更完整的日志/指标
+- 增加更细的 Codex 失败分类和恢复策略
+- 视需要引入结构化输出 schema

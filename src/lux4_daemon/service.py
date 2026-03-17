@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 
-from .models import IncomingMessage, ReplyMessage
+from .models import ConversationSession, IncomingMessage, ReplyMessage
 from .publisher import ReplyPublisher
 from .session_store import SessionStore
 
@@ -12,7 +12,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class EchoService:
-    def build_reply(self, message: IncomingMessage) -> ReplyMessage:
+    def build_reply(self, message: IncomingMessage, session: ConversationSession) -> ReplyMessage:
         return ReplyMessage(
             version=1,
             kind="reply_message",
@@ -48,7 +48,6 @@ class DaemonService:
         self._worker.join(timeout=5)
 
     def accept(self, message: IncomingMessage) -> None:
-        self._store.record_incoming(message)
         self._queue.put(message)
 
     def _run(self) -> None:
@@ -58,8 +57,18 @@ class DaemonService:
                 return
 
             try:
-                reply = self._responder.build_reply(item)
+                session = self._store.get_or_create_session(item)
+                response = self._responder.build_reply(item, session)
+                if isinstance(response, ReplyMessage):
+                    reply = response
+                    codex_session_id = None
+                else:
+                    reply = response.reply
+                    codex_session_id = response.codex_session_id
+
                 self._publisher.publish(reply)
+                if codex_session_id:
+                    self._store.set_active_codex_session(item.session_key, codex_session_id)
                 self._store.record_reply(item, reply.text)
             except Exception:
                 LOGGER.exception("failed to process incoming message", extra={"message_id": item.message_id})

@@ -13,6 +13,10 @@ class Config:
     cloudflare_account_id: str = ""
     cloudflare_queue_id: str = ""
     cloudflare_api_token: str = ""
+    codex_binary: str = "codex"
+    codex_model: str = ""
+    codex_api_key: str = ""
+    codex_timeout_seconds: float = 120.0
     request_timeout_seconds: float = 10.0
 
     @classmethod
@@ -25,6 +29,10 @@ class Config:
             cloudflare_account_id=read_config_value("LUX4_CF_ACCOUNT_ID", dotenv_values, ""),
             cloudflare_queue_id=read_config_value("LUX4_CF_QUEUE_ID", dotenv_values, ""),
             cloudflare_api_token=read_config_value("LUX4_CF_API_TOKEN", dotenv_values, ""),
+            codex_binary=read_config_value("LUX4_CODEX_BINARY", dotenv_values, "codex"),
+            codex_model=read_config_value("LUX4_CODEX_MODEL", dotenv_values, ""),
+            codex_api_key=read_config_value("CODEX_API_KEY", dotenv_values, ""),
+            codex_timeout_seconds=float(read_config_value("LUX4_CODEX_TIMEOUT_SECONDS", dotenv_values, "120")),
             request_timeout_seconds=float(read_config_value("LUX4_REQUEST_TIMEOUT_SECONDS", dotenv_values, "10")),
         )
 

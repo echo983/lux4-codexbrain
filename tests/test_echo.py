@@ -7,10 +7,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from lux4_daemon.codex_exec import CodexExecClient, CodexResumeError, CodexTurnResult
 from lux4_daemon.config import Config, load_dotenv_file
 from lux4_daemon.http import read_json_body
 from lux4_daemon.models import ReplyMessage
 from lux4_daemon.publisher import CloudflareQueueReplyPublisher
+from lux4_daemon.responder import CodexResponder
 from lux4_daemon.service import DaemonService
 from lux4_daemon.session_store import SessionStore
 
@@ -62,6 +64,12 @@ class EchoFlowTest(unittest.TestCase):
                 "replyMode": "message",
                 "text": "hello echo",
             })
+            session = store.get_session(normalized.session_key)
+            self.assertIsNotNone(session)
+            assert session is not None
+            self.assertEqual(session.sender_user_id, "user-1")
+            self.assertEqual(session.last_message_id, "msg-1")
+            self.assertIsNone(session.active_codex_session_id)
 
             service.stop()
 
@@ -180,6 +188,146 @@ class CloudflareQueueReplyPublisherTest(unittest.TestCase):
             },
             "content_type": "json",
         })
+
+
+class SessionStoreTest(unittest.TestCase):
+    def test_creates_and_updates_conversation_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message(message_id="msg-1", text="hello")
+
+            session = store.get_or_create_session(message)
+
+            self.assertEqual(session.session_key, message.session_key)
+            self.assertEqual(session.status, "active")
+            self.assertIsNone(session.active_codex_session_id)
+            self.assertEqual(session.last_message_id, "msg-1")
+
+            updated = store.set_active_codex_session(message.session_key, "codex-session-1")
+            self.assertEqual(updated.active_codex_session_id, "codex-session-1")
+            self.assertEqual(updated.status, "active")
+
+            next_message = _build_incoming_message(message_id="msg-2", text="followup")
+            next_session = store.get_or_create_session(next_message)
+            self.assertEqual(next_session.active_codex_session_id, "codex-session-1")
+            self.assertEqual(next_session.last_message_id, "msg-2")
+
+    def test_can_clear_active_codex_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            store.get_or_create_session(message)
+            store.set_active_codex_session(message.session_key, "codex-session-1")
+
+            cleared = store.clear_active_codex_session(message.session_key)
+
+            self.assertIsNone(cleared.active_codex_session_id)
+            self.assertEqual(cleared.status, "reset_required")
+
+
+class CodexExecClientTest(unittest.TestCase):
+    def test_run_turn_parses_thread_id_and_reply(self) -> None:
+        config = Config(codex_api_key="api-key")
+        client = CodexExecClient(config)
+
+        def fake_run(command, cwd, env, capture_output, text, timeout, check):
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_text("hello from codex\n", encoding="utf-8")
+            self.assertEqual(env["CODEX_API_KEY"], "api-key")
+            return mock.Mock(
+                returncode=0,
+                stdout='{"type":"thread.started","thread_id":"thread-123"}\n',
+                stderr="",
+            )
+
+        with mock.patch("lux4_daemon.codex_exec.subprocess.run", side_effect=fake_run):
+            result = client.run_turn("reply please")
+
+        self.assertEqual(result.session_id, "thread-123")
+        self.assertEqual(result.reply_text, "hello from codex")
+
+    def test_resume_failure_raises_specific_error(self) -> None:
+        client = CodexExecClient(Config())
+        with mock.patch(
+            "lux4_daemon.codex_exec.subprocess.run",
+            return_value=mock.Mock(returncode=1, stdout="", stderr="resume failed"),
+        ):
+            with self.assertRaises(CodexResumeError):
+                client.run_turn("reply please", session_id="thread-123")
+
+
+class CodexResponderTest(unittest.TestCase):
+    def test_starts_new_codex_session_when_none_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+            client = mock.Mock()
+            client.run_turn.return_value = CodexTurnResult(
+                session_id="thread-123",
+                reply_text="hello from codex",
+            )
+            responder = CodexResponder(store=store, client=client)
+
+            result = responder.build_reply(message, session)
+
+        client.run_turn.assert_called_once()
+        self.assertEqual(result.codex_session_id, "thread-123")
+        self.assertEqual(result.reply.text, "hello from codex")
+
+    def test_resume_failure_clears_session_and_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            store.get_or_create_session(message)
+            session = store.set_active_codex_session(message.session_key, "thread-old")
+            client = mock.Mock()
+            client.run_turn.side_effect = [
+                CodexResumeError("resume failed"),
+                CodexTurnResult(session_id="thread-new", reply_text="fresh reply"),
+            ]
+            responder = CodexResponder(store=store, client=client)
+
+            result = responder.build_reply(message, session)
+            reset_session = store.get_session(message.session_key)
+
+        self.assertEqual(client.run_turn.call_count, 2)
+        self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "thread-old")
+        self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
+        assert reset_session is not None
+        self.assertIsNone(reset_session.active_codex_session_id)
+        self.assertEqual(reset_session.status, "reset_required")
+        self.assertEqual(result.codex_session_id, "thread-new")
+
+    def test_prompt_contains_timestamp_and_memory_rules(self) -> None:
+        responder = CodexResponder(store=mock.Mock(), client=mock.Mock())
+        message = _build_incoming_message()
+
+        prompt = responder._build_prompt(message)
+
+        self.assertIn("Local timestamp: ", prompt)
+        self.assertIn("use the neo4j-cypher-ops skill", prompt)
+        self.assertIn("timestamp, confidence score, source_type, source_reference", prompt)
+        self.assertIn("user_explicit, user_implied, assistant_inferred, memory_retrieved, external", prompt)
+
+
+def _build_incoming_message(message_id: str = "msg-1", text: str = "hello echo"):
+    from lux4_daemon.normalize import normalize_incoming_message
+
+    normalized = normalize_incoming_message({
+        "version": 1,
+        "kind": "incoming_message",
+        "source": "rocketchat",
+        "siteUrl": "https://rocket.example.com",
+        "roomId": "room-1",
+        "senderUsername": "alice",
+        "senderUserId": "user-1",
+        "messageId": message_id,
+        "text": text,
+        "receivedAt": "2026-03-17T12:00:00Z",
+    })
+    assert normalized is not None
+    return normalized
 
 
 if __name__ == "__main__":

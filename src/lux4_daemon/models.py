@@ -32,3 +32,19 @@ class ReplyMessage:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ConversationSession:
+    session_key: str
+    source: str
+    site_url: str
+    room_id: str
+    sender_user_id: str
+    sender_username: str
+    active_codex_session_id: str | None
+    status: str
+    created_at: str
+    updated_at: str
+    last_message_id: str
+    last_message_at: str

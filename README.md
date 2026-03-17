@@ -101,6 +101,14 @@ PYTHONPATH=src python3 -m lux4_daemon
 5. 将最新 `thread_id` 回写到本地 SQLite
 6. 将最终回复推送到 Cloudflare Queue
 
+当前实现里，daemon 调用 Codex 时会显式带上：
+
+```bash
+--sandbox danger-full-access
+```
+
+也就是说，当前 Codex 运行在高权限模式下。这是有意配置，不是默认行为。
+
 本地数据库默认在：
 
 ```text

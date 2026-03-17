@@ -231,6 +231,8 @@ class CodexExecClientTest(unittest.TestCase):
         client = CodexExecClient(config)
 
         def fake_run(command, cwd, env, capture_output, text, timeout, check):
+            self.assertIn("--sandbox", command)
+            self.assertIn("danger-full-access", command)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_text("hello from codex\n", encoding="utf-8")
             self.assertEqual(env["CODEX_API_KEY"], "api-key")

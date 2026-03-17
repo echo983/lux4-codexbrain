@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
+from io import BytesIO
 import tempfile
 import unittest
 from pathlib import Path
 
 from lux4_daemon.config import Config
-from lux4_daemon.http import build_server
+from lux4_daemon.http import read_json_body
 from lux4_daemon.models import ReplyMessage
 from lux4_daemon.service import DaemonService
 from lux4_daemon.session_store import SessionStore
@@ -67,6 +67,28 @@ class ConfigShapeTest(unittest.TestCase):
     def test_config_defaults(self) -> None:
         config = Config()
         self.assertEqual(config.port, 18473)
+
+
+class RequestBodyParsingTest(unittest.TestCase):
+    def test_reads_content_length_json(self) -> None:
+        payload = b'{"hello":"world"}'
+        headers = {"content-length": str(len(payload))}
+        self.assertEqual(read_json_body(headers, BytesIO(payload)), {"hello": "world"})
+
+    def test_reads_chunked_json(self) -> None:
+        body = (
+            b"7\r\n"
+            b'{"a":1,' b"\r\n"
+            b"6\r\n"
+            b'"b":2}' b"\r\n"
+            b"0\r\n"
+            b"\r\n"
+        )
+        headers = {"transfer-encoding": "chunked"}
+        self.assertEqual(read_json_body(headers, BytesIO(body)), {"a": 1, "b": 2})
+
+    def test_rejects_missing_body_headers(self) -> None:
+        self.assertIsNone(read_json_body({}, BytesIO(b"{}")))
 
 
 if __name__ == "__main__":

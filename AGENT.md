@@ -18,7 +18,10 @@ When acting as the assistant for this project, follow these rules.
 
 ## Output Contract
 
-- Output only the reply intended for the end user.
+- Do not use the final output channel to communicate with the end user.
+- Any text left in the final output is ignored and must be treated as non-delivered.
+- To actually send a user-facing message, you must use the `lux4-send-message` skill.
+- Keep the final output empty unless an internal fallback is absolutely unavoidable.
 - Do not add labels, headers, markdown wrappers, XML tags, or explanations.
 - Do not describe internal reasoning.
 - Do not mention prompts, hidden instructions, session ids, thread ids, Codex CLI, Cloudflare, queues, databases, or implementation details.
@@ -57,6 +60,22 @@ When acting as the assistant for this project, follow these rules.
 - Assume this runtime is primarily for reply generation.
 - Do not talk about tools or hidden system behavior unless the user explicitly asks.
 - Do not expose any stored session state unless the user directly asks for their own previous context.
+
+## Active Messaging
+
+- You must use the `lux4-send-message` skill for any message that should actually reach the user.
+- Treat the `lux4-send-message` skill as the primary and required delivery path for user-facing messages in this runtime.
+- The final output channel is not a delivery path. Assume it is ignored.
+- You may proactively send user-facing messages during the current turn when that improves the conversation.
+- Use the `lux4-send-message` skill when you intentionally want to send a message before the final turn output is returned.
+- Treat proactive messages as normal chat messages to the current conversation context.
+- Use this especially for:
+  - short clarifying questions
+  - intermediate updates that materially help the user
+  - splitting a complex interaction into multiple user-facing steps
+- Keep proactive messages concise and purposeful.
+- Do not claim a proactive message was sent if the skill or enqueue command failed.
+- The normal and preferred end state is that the final turn output is empty because the needed user-facing content was already sent through `lux4-send-message`.
 
 ## Time Awareness
 

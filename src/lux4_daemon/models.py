@@ -35,6 +35,21 @@ class ReplyMessage:
 
 
 @dataclass(frozen=True)
+class OutboxMessage:
+    outbox_id: str
+    session_key: str
+    source: str
+    site_url: str
+    room_id: str
+    sender_user_id: str
+    sender_username: str
+    trigger_message_id: str
+    text: str
+    created_at: str
+    status: str
+
+
+@dataclass(frozen=True)
 class ConversationSession:
     session_key: str
     source: str

@@ -35,11 +35,13 @@ def main() -> int:
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.cursor()
+        cur.execute("DELETE FROM outbox_messages")
         cur.execute("DELETE FROM messages")
         cur.execute("DELETE FROM sessions")
         conn.commit()
         sessions = cur.execute("SELECT count(*) FROM sessions").fetchone()[0]
         messages = cur.execute("SELECT count(*) FROM messages").fetchone()[0]
+        outbox_messages = cur.execute("SELECT count(*) FROM outbox_messages").fetchone()[0]
     finally:
         conn.close()
 
@@ -47,6 +49,7 @@ def main() -> int:
         "db": str(db_path),
         "sessions": sessions,
         "messages": messages,
+        "outbox_messages": outbox_messages,
     })
     return 0
 

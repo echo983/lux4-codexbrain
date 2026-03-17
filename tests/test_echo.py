@@ -258,11 +258,37 @@ class SessionStoreTest(unittest.TestCase):
             self.assertIsNone(cleared.active_codex_session_id)
             self.assertEqual(cleared.status, "reset_required")
 
+    def test_can_enqueue_and_mark_outbox_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            store.get_or_create_session(message)
+
+            queued = store.enqueue_outbox_message(
+                session_key=message.session_key,
+                source=message.source,
+                site_url=message.site_url,
+                room_id=message.room_id,
+                sender_user_id=message.sender_user_id,
+                sender_username=message.sender_username,
+                trigger_message_id=message.message_id,
+                text="follow up from agent",
+            )
+
+            pending = store.get_pending_outbox_messages(message.session_key)
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0].outbox_id, queued.outbox_id)
+            self.assertEqual(pending[0].text, "follow up from agent")
+
+            store.mark_outbox_message_sent(queued.outbox_id)
+            self.assertEqual(store.get_pending_outbox_messages(message.session_key), [])
+
 
 class CodexExecClientTest(unittest.TestCase):
     def test_run_turn_parses_thread_id_and_reply(self) -> None:
         config = Config(
             codex_api_key="api-key",
+            database_path="var/test.sqlite3",
             neo4j_uri="bolt://graph.example:7687",
             neo4j_username="neo4j-user",
             neo4j_password="secret-pass",
@@ -278,6 +304,8 @@ class CodexExecClientTest(unittest.TestCase):
             self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
             self.assertEqual(env["NEO4J_USERNAME"], "neo4j-user")
             self.assertEqual(env["NEO4J_PASSWORD"], "secret-pass")
+            self.assertEqual(env["LUX4_AGENT_DB_PATH"], "var/test.sqlite3")
+            self.assertEqual(env["LUX4_AGENT_ROOM_ID"], "room-1")
             return mock.Mock(
                 returncode=0,
                 stdout='{"type":"thread.started","thread_id":"thread-123"}\n',
@@ -285,7 +313,7 @@ class CodexExecClientTest(unittest.TestCase):
             )
 
         with mock.patch("lux4_daemon.codex_exec.subprocess.run", side_effect=fake_run):
-            result = client.run_turn("reply please")
+            result = client.run_turn("reply please", context={"LUX4_AGENT_ROOM_ID": "room-1"})
 
         self.assertEqual(result.session_id, "thread-123")
         self.assertEqual(result.reply_text, "hello from codex")
@@ -319,6 +347,7 @@ class CodexExecClientTest(unittest.TestCase):
 
     def test_resume_command_does_not_include_sandbox_flag(self) -> None:
         client = CodexExecClient(Config(
+            database_path="var/test.sqlite3",
             neo4j_uri="bolt://graph.example:7687",
             neo4j_username="neo4j-user",
             neo4j_password="secret-pass",
@@ -418,6 +447,7 @@ class CodexResponderTest(unittest.TestCase):
         prompt = responder._build_prompt(message)
 
         self.assertIn("Local timestamp: ", prompt)
+        self.assertIn("Room ID: room-1", prompt)
         self.assertIn("User ID: user-1", prompt)
         self.assertIn("Username: alice", prompt)
         self.assertIn("Latest user message:\nhello echo", prompt)
@@ -444,6 +474,48 @@ class CodexResponderTest(unittest.TestCase):
         self.assertIn("message_id=msg-1", joined)
         self.assertIn("stored_codex_session_id=None", joined)
         self.assertIn("returned_codex_session_id=thread-123", joined)
+
+
+class DaemonOutboxFlowTest(unittest.TestCase):
+    def test_service_publishes_pending_outbox_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            publisher = CapturingPublisher()
+            responder = mock.Mock()
+            responder.build_reply.return_value = mock.Mock(
+                reply=ReplyMessage(
+                    version=1,
+                    kind="reply_message",
+                    source="rocketchat",
+                    siteUrl="https://rocket.example.com",
+                    roomId="room-1",
+                    replyMode="message",
+                    text="final reply",
+                ),
+                codex_session_id="thread-123",
+            )
+            service = DaemonService(store=store, publisher=publisher, responder=responder)
+            service.start()
+
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+            store.enqueue_outbox_message(
+                session_key=session.session_key,
+                source=message.source,
+                site_url=message.site_url,
+                room_id=message.room_id,
+                sender_user_id=message.sender_user_id,
+                sender_username=message.sender_username,
+                trigger_message_id=message.message_id,
+                text="agent proactive message",
+            )
+
+            service.accept(message)
+            service._queue.join()
+
+            self.assertEqual([m.text for m in publisher.messages], ["agent proactive message", "final reply"])
+            self.assertEqual(store.get_pending_outbox_messages(message.session_key), [])
+            service.stop()
 
 
 def _build_incoming_message(message_id: str = "msg-1", text: str = "hello echo"):

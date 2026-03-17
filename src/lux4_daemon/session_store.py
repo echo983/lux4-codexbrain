@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import uuid
 from contextlib import closing
 from datetime import UTC, datetime
 
-from .models import ConversationSession, IncomingMessage
+from .models import ConversationSession, IncomingMessage, OutboxMessage
 
 
 class SessionStore:
@@ -52,6 +53,23 @@ class SessionStore:
                         direction TEXT NOT NULL,
                         text TEXT NOT NULL,
                         created_at TEXT NOT NULL,
+                        FOREIGN KEY(session_key) REFERENCES sessions(session_key)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS outbox_messages (
+                        outbox_id TEXT PRIMARY KEY,
+                        session_key TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        site_url TEXT NOT NULL,
+                        room_id TEXT NOT NULL,
+                        sender_user_id TEXT NOT NULL,
+                        sender_username TEXT NOT NULL,
+                        trigger_message_id TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        published_at TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        failure_detail TEXT NOT NULL DEFAULT '',
                         FOREIGN KEY(session_key) REFERENCES sessions(session_key)
                     );
                     """
@@ -237,6 +255,171 @@ class SessionStore:
             raise RuntimeError(f"failed to load session after codex session clear: {session_key}")
         return session
 
+    def enqueue_outbox_message(
+        self,
+        *,
+        session_key: str,
+        source: str,
+        site_url: str,
+        room_id: str,
+        sender_user_id: str,
+        sender_username: str,
+        trigger_message_id: str,
+        text: str,
+    ) -> OutboxMessage:
+        now = _utc_now()
+        outbox_id = uuid.uuid4().hex
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO outbox_messages (
+                        outbox_id,
+                        session_key,
+                        source,
+                        site_url,
+                        room_id,
+                        sender_user_id,
+                        sender_username,
+                        trigger_message_id,
+                        text,
+                        created_at,
+                        status,
+                        failure_detail
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '')
+                    """,
+                    (
+                        outbox_id,
+                        session_key,
+                        source,
+                        site_url,
+                        room_id,
+                        sender_user_id,
+                        sender_username,
+                        trigger_message_id,
+                        text,
+                        now,
+                    ),
+                )
+        message = self.get_outbox_message(outbox_id)
+        if message is None:
+            raise RuntimeError(f"failed to load outbox message after insert: {outbox_id}")
+        return message
+
+    def get_pending_outbox_messages(self, session_key: str) -> list[OutboxMessage]:
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    outbox_id,
+                    session_key,
+                    source,
+                    site_url,
+                    room_id,
+                    sender_user_id,
+                    sender_username,
+                    trigger_message_id,
+                    text,
+                    created_at,
+                    status
+                FROM outbox_messages
+                WHERE session_key = ? AND status = 'pending'
+                ORDER BY created_at ASC, outbox_id ASC
+                """,
+                (session_key,),
+            ).fetchall()
+        return [_outbox_from_row(row) for row in rows]
+
+    def mark_outbox_message_sent(self, outbox_id: str) -> None:
+        now = _utc_now()
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        outbox_id,
+                        session_key,
+                        source,
+                        site_url,
+                        room_id,
+                        sender_user_id,
+                        sender_username,
+                        trigger_message_id,
+                        text,
+                        created_at,
+                        status
+                    FROM outbox_messages
+                    WHERE outbox_id = ?
+                    """,
+                    (outbox_id,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(f"outbox message not found: {outbox_id}")
+                connection.execute(
+                    """
+                    UPDATE outbox_messages
+                    SET status = 'sent', published_at = ?, failure_detail = ''
+                    WHERE outbox_id = ?
+                    """,
+                    (now, outbox_id),
+                )
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO messages (
+                        message_id,
+                        session_key,
+                        direction,
+                        text,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"outbox::{outbox_id}",
+                        row["session_key"],
+                        "reply",
+                        row["text"],
+                        now,
+                    ),
+                )
+
+    def mark_outbox_message_failed(self, outbox_id: str, detail: str) -> None:
+        now = _utc_now()
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    UPDATE outbox_messages
+                    SET status = 'failed', published_at = ?, failure_detail = ?
+                    WHERE outbox_id = ?
+                    """,
+                    (now, detail[:500], outbox_id),
+                )
+
+    def get_outbox_message(self, outbox_id: str) -> OutboxMessage | None:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    outbox_id,
+                    session_key,
+                    source,
+                    site_url,
+                    room_id,
+                    sender_user_id,
+                    sender_username,
+                    trigger_message_id,
+                    text,
+                    created_at,
+                    status
+                FROM outbox_messages
+                WHERE outbox_id = ?
+                """,
+                (outbox_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _outbox_from_row(row)
+
 
 def _session_from_row(row: sqlite3.Row) -> ConversationSession:
     return ConversationSession(
@@ -252,6 +435,22 @@ def _session_from_row(row: sqlite3.Row) -> ConversationSession:
         updated_at=row["updated_at"],
         last_message_id=row["last_message_id"],
         last_message_at=row["last_message_at"],
+    )
+
+
+def _outbox_from_row(row: sqlite3.Row) -> OutboxMessage:
+    return OutboxMessage(
+        outbox_id=row["outbox_id"],
+        session_key=row["session_key"],
+        source=row["source"],
+        site_url=row["site_url"],
+        room_id=row["room_id"],
+        sender_user_id=row["sender_user_id"],
+        sender_username=row["sender_username"],
+        trigger_message_id=row["trigger_message_id"],
+        text=row["text"],
+        created_at=row["created_at"],
+        status=row["status"],
     )
 
 

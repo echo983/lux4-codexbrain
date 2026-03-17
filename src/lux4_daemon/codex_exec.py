@@ -27,6 +27,7 @@ class CodexResumeError(CodexExecError):
 
 class CodexExecClient:
     def __init__(self, config: Config) -> None:
+        self._database_path = config.database_path
         self._binary = config.codex_binary
         self._model = config.codex_model
         self._api_key = config.codex_api_key
@@ -44,13 +45,14 @@ class CodexExecClient:
         session_id: str | None = None,
         *,
         debug_label: str | None = None,
+        context: dict[str, str] | None = None,
     ) -> CodexTurnResult:
         output_path = self._make_output_path()
         command = self._build_command(prompt, output_path, session_id)
         completed = subprocess.run(
             command,
             cwd=str(Path.cwd()),
-            env=self._build_env(),
+            env=self._build_env(context),
             capture_output=True,
             text=True,
             timeout=self._timeout,
@@ -71,8 +73,6 @@ class CodexExecClient:
             raise CodexExecError(f"codex exec did not emit thread id: {stdout_text.strip()}")
 
         reply_text = output_path.read_text(encoding="utf-8").strip()
-        if not reply_text:
-            raise CodexExecError("codex exec returned an empty final reply")
 
         return CodexTurnResult(session_id=thread_id, reply_text=reply_text)
 
@@ -89,7 +89,7 @@ class CodexExecClient:
         command.append(prompt)
         return command
 
-    def _build_env(self) -> dict[str, str]:
+    def _build_env(self, context: dict[str, str] | None = None) -> dict[str, str]:
         missing = []
         if not self._neo4j_uri:
             missing.append("NEO4J_URI or NEO4J_BOLT_URL")
@@ -112,6 +112,10 @@ class CodexExecClient:
         env["NEO4J_PASSWORD"] = self._neo4j_password
         if self._neo4j_database:
             env["NEO4J_DATABASE"] = self._neo4j_database
+        env["LUX4_AGENT_DB_PATH"] = self._database_path
+        for key, value in (context or {}).items():
+            if value:
+                env[key] = value
         return env
 
     def _build_error(

@@ -28,6 +28,15 @@ class CodexResponder:
 
     def build_reply(self, message: IncomingMessage, session: ConversationSession) -> ResponderResult:
         prompt = self._build_prompt(message)
+        context = {
+            "LUX4_AGENT_SESSION_KEY": session.session_key,
+            "LUX4_AGENT_SOURCE": message.source,
+            "LUX4_AGENT_SITE_URL": message.site_url,
+            "LUX4_AGENT_ROOM_ID": message.room_id,
+            "LUX4_AGENT_SENDER_USER_ID": message.sender_user_id,
+            "LUX4_AGENT_SENDER_USERNAME": message.sender_username,
+            "LUX4_AGENT_TRIGGER_MESSAGE_ID": message.message_id,
+        }
         current_session_id = session.active_codex_session_id
         resume_attempted = bool(current_session_id)
         resume_restarted = False
@@ -44,13 +53,18 @@ class CodexResponder:
 
         if current_session_id:
             try:
-                turn = self._client.run_turn(prompt, session_id=current_session_id, debug_label=message.message_id)
+                turn = self._client.run_turn(
+                    prompt,
+                    session_id=current_session_id,
+                    debug_label=message.message_id,
+                    context=context,
+                )
             except CodexResumeError:
                 self._store.clear_active_codex_session(session.session_key)
                 resume_restarted = True
-                turn = self._client.run_turn(prompt, debug_label=message.message_id)
+                turn = self._client.run_turn(prompt, debug_label=message.message_id, context=context)
         else:
-            turn = self._client.run_turn(prompt, debug_label=message.message_id)
+            turn = self._client.run_turn(prompt, debug_label=message.message_id, context=context)
 
         if self._debug_sessions:
             LOGGER.info(
@@ -84,6 +98,7 @@ class CodexResponder:
         local_timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
         return "\n".join([
             f"Local timestamp: {local_timestamp}",
+            f"Room ID: {message.room_id}",
             f"User ID: {message.sender_user_id}",
             f"Username: {message.sender_username}",
             "Latest user message:",

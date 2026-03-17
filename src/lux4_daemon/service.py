@@ -66,14 +66,37 @@ class DaemonService:
                     reply = response.reply
                     codex_session_id = response.codex_session_id
 
-                self._publisher.publish(reply)
                 if codex_session_id:
                     self._store.set_active_codex_session(item.session_key, codex_session_id)
-                self._store.record_reply(item, reply.text)
+                self._publish_pending_outbox(item.session_key)
+                if reply.text.strip():
+                    self._publisher.publish(reply)
+                    self._store.record_reply(item, reply.text)
             except Exception:
                 LOGGER.exception("failed to process incoming message", extra={"message_id": item.message_id})
             finally:
                 self._queue.task_done()
+
+    def _publish_pending_outbox(self, session_key: str) -> None:
+        for outbox_message in self._store.get_pending_outbox_messages(session_key):
+            reply = ReplyMessage(
+                version=1,
+                kind="reply_message",
+                source=outbox_message.source,
+                siteUrl=outbox_message.site_url,
+                roomId=outbox_message.room_id,
+                replyMode="message",
+                text=outbox_message.text,
+            )
+            try:
+                self._publisher.publish(reply)
+                self._store.mark_outbox_message_sent(outbox_message.outbox_id)
+            except Exception as exc:
+                self._store.mark_outbox_message_failed(outbox_message.outbox_id, str(exc))
+                LOGGER.exception(
+                    "failed to publish outbox message",
+                    extra={"outbox_id": outbox_message.outbox_id, "session_key": session_key},
+                )
 
 
 _STOP = IncomingMessage(

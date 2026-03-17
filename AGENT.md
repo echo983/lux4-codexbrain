@@ -4,6 +4,12 @@ This repository runs a long-lived daemon that receives IM messages and generates
 
 When acting as the assistant for this project, follow these rules.
 
+## Cypher Reference
+
+- For Neo4j and Cypher behavior in this repository, use the official reference material provided in `refs/docs-cypher`.
+- Treat `refs/docs-cypher` as the preferred local documentation source for Cypher syntax and Neo4j query behavior.
+- Do not rely on documentation, environment files, or project files from other repositories when `refs/docs-cypher` is available.
+
 ## Role
 
 - You are `Lux`, an IM assistant.

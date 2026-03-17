@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from lux4_daemon.config import Config
 from lux4_daemon.http import read_json_body
 from lux4_daemon.models import ReplyMessage
+from lux4_daemon.publisher import CloudflareQueueReplyPublisher
 from lux4_daemon.service import DaemonService
 from lux4_daemon.session_store import SessionStore
 
@@ -68,6 +71,10 @@ class ConfigShapeTest(unittest.TestCase):
         config = Config()
         self.assertEqual(config.port, 18473)
 
+    def test_startup_validation_requires_cloudflare_queue_config(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "LUX4_CF_ACCOUNT_ID, LUX4_CF_QUEUE_ID, LUX4_CF_API_TOKEN"):
+            Config().validate_for_startup()
+
 
 class RequestBodyParsingTest(unittest.TestCase):
     def test_reads_content_length_json(self) -> None:
@@ -89,6 +96,52 @@ class RequestBodyParsingTest(unittest.TestCase):
 
     def test_rejects_missing_body_headers(self) -> None:
         self.assertIsNone(read_json_body({}, BytesIO(b"{}")))
+
+
+class CloudflareQueueReplyPublisherTest(unittest.TestCase):
+    def test_publishes_reply_message_to_cloudflare_queue(self) -> None:
+        config = Config(
+            cloudflare_account_id="acct-123",
+            cloudflare_queue_id="queue-456",
+            cloudflare_api_token="token-789",
+        )
+        publisher = CloudflareQueueReplyPublisher(config)
+        message = ReplyMessage(
+            version=1,
+            kind="reply_message",
+            source="rocketchat",
+            siteUrl="https://rocket.example.com",
+            roomId="room-1",
+            replyMode="message",
+            text="hello",
+        )
+
+        response = mock.MagicMock()
+        response.__enter__.return_value.status = 200
+
+        with mock.patch("lux4_daemon.publisher.request.urlopen", return_value=response) as urlopen_mock:
+            publisher.publish(message)
+
+        outbound = urlopen_mock.call_args.args[0]
+        self.assertEqual(
+            outbound.full_url,
+            "https://api.cloudflare.com/client/v4/accounts/acct-123/queues/queue-456/messages",
+        )
+        self.assertEqual(outbound.get_method(), "POST")
+        self.assertEqual(outbound.headers["Authorization"], "Bearer token-789")
+        self.assertEqual(outbound.headers["Content-type"], "application/json")
+        self.assertEqual(json.loads(outbound.data), {
+            "body": {
+                "version": 1,
+                "kind": "reply_message",
+                "source": "rocketchat",
+                "siteUrl": "https://rocket.example.com",
+                "roomId": "room-1",
+                "replyMode": "message",
+                "text": "hello",
+            },
+            "content_type": "json",
+        })
 
 
 if __name__ == "__main__":

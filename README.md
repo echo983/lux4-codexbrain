@@ -20,6 +20,7 @@
 - 已实现异步后台处理
 - 已实现本地 SQLite 会话记录
 - 已实现 reply 出站推送
+- reply 出站目标固定为 Cloudflare Queue push API
 - 当前回复策略：原样 echo
 
 ---
@@ -27,6 +28,9 @@
 ## 启动方式
 
 ```bash
+LUX4_CF_ACCOUNT_ID='your-account-id' \
+LUX4_CF_QUEUE_ID='your-queue-id' \
+LUX4_CF_API_TOKEN='your-api-token' \
 PYTHONPATH=src python3 -m lux4_daemon
 ```
 
@@ -44,14 +48,15 @@ PYTHONPATH=src python3 -m lux4_daemon
 | `LUX4_HOST` | `0.0.0.0` | HTTP 服务监听地址 |
 | `LUX4_PORT` | `18473` | HTTP 服务监听端口 |
 | `LUX4_DB_PATH` | `var/lux4_daemon.sqlite3` | SQLite 数据库文件路径 |
-| `LUX4_REPLY_PUSH_URL` | 空 | reply 推送目标地址 |
-| `LUX4_REPLY_PUSH_TOKEN` | 空 | reply 推送 Bearer Token |
+| `LUX4_CF_ACCOUNT_ID` | 无 | Cloudflare Account ID |
+| `LUX4_CF_QUEUE_ID` | 无 | Cloudflare Queue ID |
+| `LUX4_CF_API_TOKEN` | 无 | Cloudflare API Token，需有队列写权限 |
 | `LUX4_REQUEST_TIMEOUT_SECONDS` | `10` | reply 出站 HTTP 超时秒数 |
 
 说明：
 
-- 如果 `LUX4_REPLY_PUSH_URL` 为空，daemon 仍会接收并处理消息，但不会真正把 reply 发到外部系统。
-- 这适合本地开发或仅验证入站链路。
+- `LUX4_CF_ACCOUNT_ID`、`LUX4_CF_QUEUE_ID`、`LUX4_CF_API_TOKEN` 是启动必需项。
+- 缺少任意一个时，daemon 会在启动时直接报错退出，不会进入“只接收入站不发 reply”的半工作状态。
 
 ---
 
@@ -340,7 +345,13 @@ curl -sS \
 
 ## Reply 出站格式
 
-daemon 后台处理完成后，会向 `LUX4_REPLY_PUSH_URL` 发起一个 HTTP `POST` 请求。
+daemon 后台处理完成后，会向 Cloudflare Queue push API 发起一个 HTTP `POST` 请求。
+
+目标地址：
+
+```text
+https://api.cloudflare.com/client/v4/accounts/{account_id}/queues/{queue_id}/messages
+```
 
 请求头：
 
@@ -348,7 +359,7 @@ daemon 后台处理完成后，会向 `LUX4_REPLY_PUSH_URL` 发起一个 HTTP `P
 Content-Type: application/json
 ```
 
-如果配置了 `LUX4_REPLY_PUSH_TOKEN`，还会额外带上：
+鉴权头：
 
 ```http
 Authorization: Bearer <token>
@@ -358,17 +369,27 @@ Authorization: Bearer <token>
 
 ```json
 {
-  "version": 1,
-  "kind": "reply_message",
-  "source": "rocketchat",
-  "siteUrl": "https://rocket.example.com",
-  "roomId": "room-1",
-  "replyMode": "message",
-  "text": "hello"
+  "body": {
+    "version": 1,
+    "kind": "reply_message",
+    "source": "rocketchat",
+    "siteUrl": "https://rocket.example.com",
+    "roomId": "room-1",
+    "replyMode": "message",
+    "text": "hello"
+  },
+  "content_type": "json"
 }
 ```
 
 字段说明：
+
+| 字段 | 说明 |
+|---|---|
+| `body` | 实际入队消息内容，即 `reply_message` 对象 |
+| `content_type` | 当前固定为 `json` |
+
+`body` 内部字段说明：
 
 | 字段 | 说明 |
 |---|---|
@@ -393,7 +414,7 @@ Authorization: Bearer <token>
 3. 上游调用 `POST /api/v1/messages/incoming`。
 4. 如果收到 `202 Accepted`，说明 daemon 已接受处理。
 5. daemon 在后台执行回复逻辑。
-6. daemon 把 `reply_message` 推送到 `LUX4_REPLY_PUSH_URL`。
+6. daemon 把 `reply_message` 推送到 Cloudflare Queue。
 7. 上游 reply queue 消费者再把消息真正发回 IM 平台。
 
 ---

@@ -9,8 +9,9 @@ class Config:
     host: str = "0.0.0.0"
     port: int = 18473
     database_path: str = "var/lux4_daemon.sqlite3"
-    reply_push_url: str = ""
-    reply_push_token: str = ""
+    cloudflare_account_id: str = ""
+    cloudflare_queue_id: str = ""
+    cloudflare_api_token: str = ""
     request_timeout_seconds: float = 10.0
 
     @classmethod
@@ -19,7 +20,22 @@ class Config:
             host=os.getenv("LUX4_HOST", "0.0.0.0"),
             port=int(os.getenv("LUX4_PORT", "18473")),
             database_path=os.getenv("LUX4_DB_PATH", "var/lux4_daemon.sqlite3"),
-            reply_push_url=os.getenv("LUX4_REPLY_PUSH_URL", "").strip(),
-            reply_push_token=os.getenv("LUX4_REPLY_PUSH_TOKEN", "").strip(),
+            cloudflare_account_id=os.getenv("LUX4_CF_ACCOUNT_ID", "").strip(),
+            cloudflare_queue_id=os.getenv("LUX4_CF_QUEUE_ID", "").strip(),
+            cloudflare_api_token=os.getenv("LUX4_CF_API_TOKEN", "").strip(),
             request_timeout_seconds=float(os.getenv("LUX4_REQUEST_TIMEOUT_SECONDS", "10")),
         )
+
+    def validate_for_startup(self) -> None:
+        missing = []
+        if not self.cloudflare_account_id:
+            missing.append("LUX4_CF_ACCOUNT_ID")
+        if not self.cloudflare_queue_id:
+            missing.append("LUX4_CF_QUEUE_ID")
+        if not self.cloudflare_api_token:
+            missing.append("LUX4_CF_API_TOKEN")
+
+        if missing:
+            raise RuntimeError(
+                "Missing required Cloudflare Queue configuration: " + ", ".join(missing)
+            )

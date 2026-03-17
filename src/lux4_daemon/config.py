@@ -17,6 +17,7 @@ class Config:
     codex_model: str = ""
     codex_api_key: str = ""
     codex_timeout_seconds: float = 120.0
+    debug_sessions: bool = False
     request_timeout_seconds: float = 10.0
 
     @classmethod
@@ -33,6 +34,7 @@ class Config:
             codex_model=read_config_value("LUX4_CODEX_MODEL", dotenv_values, ""),
             codex_api_key=read_config_value("CODEX_API_KEY", dotenv_values, ""),
             codex_timeout_seconds=float(read_config_value("LUX4_CODEX_TIMEOUT_SECONDS", dotenv_values, "120")),
+            debug_sessions=read_config_flag("LUX4_DEBUG_SESSIONS", dotenv_values, False),
             request_timeout_seconds=float(read_config_value("LUX4_REQUEST_TIMEOUT_SECONDS", dotenv_values, "10")),
         )
 
@@ -88,3 +90,9 @@ def parse_dotenv_value(raw_value: str) -> str:
     if len(raw_value) >= 2 and raw_value[0] == raw_value[-1] and raw_value[0] in {"'", '"'}:
         return raw_value[1:-1]
     return raw_value
+
+
+def read_config_flag(key: str, dotenv_values: dict[str, str], default: bool) -> bool:
+    raw_default = "1" if default else "0"
+    value = read_config_value(key, dotenv_values, raw_default).lower()
+    return value in {"1", "true", "yes", "on"}

@@ -65,8 +65,9 @@ class CodexExecClient:
             command = [self._binary, "exec", "resume", session_id]
         else:
             command = [self._binary, "exec"]
+            command.extend(["--sandbox", "danger-full-access"])
 
-        command.extend(["--sandbox", "danger-full-access", "--json", "-o", str(output_path)])
+        command.extend(["--json", "-o", str(output_path)])
         if self._model:
             command.extend(["--model", self._model])
         command.append(prompt)

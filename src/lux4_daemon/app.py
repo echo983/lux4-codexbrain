@@ -22,7 +22,7 @@ def create_app(config: Config | None = None) -> tuple[DaemonService, ThreadingHT
     resolved_config.validate_for_startup()
     store = SessionStore(resolved_config.database_path)
     publisher = CloudflareQueueReplyPublisher(resolved_config)
-    responder = CodexResponder(store=store, client=CodexExecClient(resolved_config))
+    responder = CodexResponder(store=store, client=CodexExecClient(resolved_config), config=resolved_config)
     daemon_service = DaemonService(store=store, publisher=publisher, responder=responder)
     daemon_service.start()
     server = build_server(resolved_config.host, resolved_config.port, daemon_service)

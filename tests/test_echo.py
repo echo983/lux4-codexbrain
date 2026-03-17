@@ -78,6 +78,7 @@ class ConfigShapeTest(unittest.TestCase):
     def test_config_defaults(self) -> None:
         config = Config()
         self.assertEqual(config.port, 18473)
+        self.assertFalse(config.debug_sessions)
 
     def test_startup_validation_requires_cloudflare_queue_config(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "LUX4_CF_ACCOUNT_ID, LUX4_CF_QUEUE_ID, LUX4_CF_API_TOKEN"):
@@ -120,6 +121,16 @@ class ConfigShapeTest(unittest.TestCase):
         self.assertEqual(config.cloudflare_account_id, "acct-from-file")
         self.assertEqual(config.cloudflare_queue_id, "queue-from-env")
         self.assertEqual(config.cloudflare_api_token, "token-from-file")
+
+    def test_reads_boolean_debug_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text("LUX4_DEBUG_SESSIONS=true\n", encoding="utf-8")
+
+            with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
+                config = Config.from_env()
+
+        self.assertTrue(config.debug_sessions)
 
 
 class RequestBodyParsingTest(unittest.TestCase):
@@ -248,6 +259,26 @@ class CodexExecClientTest(unittest.TestCase):
         self.assertEqual(result.session_id, "thread-123")
         self.assertEqual(result.reply_text, "hello from codex")
 
+    def test_resume_command_does_not_include_sandbox_flag(self) -> None:
+        client = CodexExecClient(Config())
+
+        def fake_run(command, cwd, env, capture_output, text, timeout, check):
+            self.assertNotIn("--sandbox", command)
+            self.assertEqual(command[:4], ["codex", "exec", "resume", "thread-123"])
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_text("hello again\n", encoding="utf-8")
+            return mock.Mock(
+                returncode=0,
+                stdout='{"type":"thread.started","thread_id":"thread-123"}\n',
+                stderr="",
+            )
+
+        with mock.patch("lux4_daemon.codex_exec.subprocess.run", side_effect=fake_run):
+            result = client.run_turn("reply please", session_id="thread-123")
+
+        self.assertEqual(result.session_id, "thread-123")
+        self.assertEqual(result.reply_text, "hello again")
+
     def test_resume_failure_raises_specific_error(self) -> None:
         client = CodexExecClient(Config())
         with mock.patch(
@@ -276,6 +307,8 @@ class CodexResponderTest(unittest.TestCase):
         client.run_turn.assert_called_once()
         self.assertEqual(result.codex_session_id, "thread-123")
         self.assertEqual(result.reply.text, "hello from codex")
+        self.assertFalse(result.resume_attempted)
+        self.assertFalse(result.resume_restarted)
 
     def test_resume_failure_clears_session_and_restarts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -300,6 +333,8 @@ class CodexResponderTest(unittest.TestCase):
         self.assertIsNone(reset_session.active_codex_session_id)
         self.assertEqual(reset_session.status, "reset_required")
         self.assertEqual(result.codex_session_id, "thread-new")
+        self.assertTrue(result.resume_attempted)
+        self.assertTrue(result.resume_restarted)
 
     def test_prompt_contains_timestamp_and_memory_rules(self) -> None:
         responder = CodexResponder(store=mock.Mock(), client=mock.Mock())
@@ -311,6 +346,27 @@ class CodexResponderTest(unittest.TestCase):
         self.assertIn("use the neo4j-cypher-ops skill", prompt)
         self.assertIn("timestamp, confidence score, source_type, source_reference", prompt)
         self.assertIn("user_explicit, user_implied, assistant_inferred, memory_retrieved, external", prompt)
+
+    def test_debug_logging_includes_session_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+            client = mock.Mock()
+            client.run_turn.return_value = CodexTurnResult(
+                session_id="thread-123",
+                reply_text="hello from codex",
+            )
+            responder = CodexResponder(store=store, client=client, config=Config(debug_sessions=True))
+
+            with self.assertLogs("lux4_daemon.responder", level="INFO") as logs:
+                responder.build_reply(message, session)
+
+        joined = "\n".join(logs.output)
+        self.assertIn("codex session debug: starting turn", joined)
+        self.assertIn("message_id=msg-1", joined)
+        self.assertIn("stored_codex_session_id=None", joined)
+        self.assertIn("returned_codex_session_id=thread-123", joined)
 
 
 def _build_incoming_message(message_id: str = "msg-1", text: str = "hello echo"):

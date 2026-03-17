@@ -11,6 +11,8 @@
 
 当前版本已经接入 `codex exec`，并支持按用户会话续接已有 Codex session。
 
+此外，仓库现在还提供一组直接调用 Google Maps / Weather API 的原语脚本，给后续 skill 和日常地图问答使用。
+
 ---
 
 ## 当前状态
@@ -24,6 +26,12 @@
 - 已实现 reply 出站推送
 - reply 出站目标固定为 Cloudflare Queue push API
 - 助手行为由项目根目录 [AGENT.md](/root/lux4-codexbrain/AGENT.md) 约束
+- 已实现 5 个 Google 地图原语脚本：
+  - [google_places_search.py](/root/lux4-codexbrain/scripts/google_places_search.py)
+  - [google_place_details.py](/root/lux4-codexbrain/scripts/google_place_details.py)
+  - [google_geocode.py](/root/lux4-codexbrain/scripts/google_geocode.py)
+  - [google_compute_routes.py](/root/lux4-codexbrain/scripts/google_compute_routes.py)
+  - [google_weather.py](/root/lux4-codexbrain/scripts/google_weather.py)
 
 ---
 
@@ -81,6 +89,7 @@ PYTHONPATH=src python3 -m lux4_daemon
 | `LUX4_DEBUG_SESSIONS` | `0` | 打开后输出会话续接调试日志 |
 | `CODEX_API_KEY` | 无 | Codex API key，会透传给 `codex exec` |
 | `LUX4_REQUEST_TIMEOUT_SECONDS` | `10` | reply 出站 HTTP 超时秒数 |
+| `GOOGLE_MAPS_API_KEY` | 无 | Google Maps / Routes / Geocoding / Weather API key |
 
 说明：
 
@@ -89,6 +98,192 @@ PYTHONPATH=src python3 -m lux4_daemon
 - `.env` 文件只补充缺失项，不覆盖已经存在的进程环境变量。
 - 如果本机没有可复用的 Codex 登录态，建议显式配置 `CODEX_API_KEY`。
 - `LUX4_DEBUG_SESSIONS=1` 时，会输出本轮使用的 `stored_codex_session_id`、返回的 `returned_codex_session_id`、是否尝试了 `resume`，以及是否发生了重建。
+- 如果要使用 Google 原语脚本，当前项目 `.env` 里还需要配置 `GOOGLE_MAPS_API_KEY`。
+
+---
+
+## Google 原语脚本
+
+这组脚本不依赖当前 Maps MCP 的参数绑定，而是直接调用 Google 官方 API。
+
+当前已经实测可用的原语有：
+
+- 地点搜索：[google_places_search.py](/root/lux4-codexbrain/scripts/google_places_search.py)
+- 地点详情：[google_place_details.py](/root/lux4-codexbrain/scripts/google_place_details.py)
+- 地理编码：[google_geocode.py](/root/lux4-codexbrain/scripts/google_geocode.py)
+- 路线规划：[google_compute_routes.py](/root/lux4-codexbrain/scripts/google_compute_routes.py)
+- 天气查询：[google_weather.py](/root/lux4-codexbrain/scripts/google_weather.py)
+
+建议在当前项目 `.env` 中配置：
+
+```dotenv
+GOOGLE_MAPS_API_KEY=your-google-maps-api-key
+```
+
+建议在 Google Cloud 中启用这些 API：
+
+- `Places API (New)`
+- `Geocoding API`
+- `Routes API`
+- `Weather API`
+
+### 1. 地点搜索
+
+示例：
+
+```bash
+python3 scripts/google_places_search.py \
+  'coffee shops near Sagrada Familia, Barcelona, Spain' \
+  --language-code en --region-code ES --max-results 3
+```
+
+返回字段包括：
+
+- `id`
+- `name`
+- `address`
+- `latitude` / `longitude`
+- `primary_type`
+- `rating`
+- `google_maps_uri`
+- `website_uri`
+
+适合问题：
+
+- 附近有哪些好吃的
+- 某地附近有哪些咖啡馆
+- 某个邮编附近有哪些靠谱餐厅
+
+### 2. 地点详情
+
+示例：
+
+```bash
+python3 scripts/google_place_details.py \
+  ChIJt5ayg9ujpBIRB-x8NP5gU0k \
+  --language-code en --region-code ES
+```
+
+返回字段包括：
+
+- `name`
+- `address`
+- `primary_type`
+- `types`
+- `rating`
+- `business_status`
+- `website_uri`
+- `regular_opening_hours`
+
+适合问题：
+
+- 这家店是做什么的
+- 这个地方现在还开着吗
+- 这家店的营业时间和网址是什么
+
+### 3. 地理编码
+
+示例：
+
+```bash
+python3 scripts/google_geocode.py \
+  'Sagrada Familia, Barcelona, Spain' \
+  --language en --region es
+```
+
+返回字段包括：
+
+- `formatted_address`
+- `place_id`
+- `latitude`
+- `longitude`
+- `location_type`
+
+适合问题：
+
+- 把地点名转成坐标
+- 给路线、天气、附近搜索提供统一定位入口
+
+### 4. 路线规划
+
+示例：
+
+步行：
+
+```bash
+python3 scripts/google_compute_routes.py \
+  'Sagrada Familia, Barcelona, Spain' \
+  'Blackbird Coffee Corner - Sagrada Familia, Barcelona, Spain' \
+  --travel-mode WALK --language-code en --region-code ES
+```
+
+公交：
+
+```bash
+python3 scripts/google_compute_routes.py \
+  'Sagrada Familia, Barcelona, Spain' \
+  'Blackbird Coffee Corner - Sagrada Familia, Barcelona, Spain' \
+  --travel-mode TRANSIT --language-code en --region-code ES
+```
+
+返回字段包括：
+
+- `distance_meters`
+- `duration`
+- `steps[].instruction`
+- `steps[].travel_mode`
+- `steps[].transit_line`
+- `steps[].transit_headsign`
+
+适合问题：
+
+- 去某个商店怎么走
+- 坐多少路公交车
+- 大概要多久
+
+### 5. 天气查询
+
+示例：
+
+当前天气：
+
+```bash
+python3 scripts/google_weather.py \
+  'Barcelona, Spain' \
+  --mode current --language-code en --units-system METRIC
+```
+
+未来两天天气：
+
+```bash
+python3 scripts/google_weather.py \
+  'Barcelona, Spain' \
+  --mode daily --language-code en --units-system METRIC --days 2
+```
+
+返回字段包括：
+
+- `weather_condition`
+- `temperature`
+- `feels_like_temperature`
+- `humidity`
+- `uv_index`
+- `wind_speed`
+- `precipitation`
+- `sunrise_time`
+- `sunset_time`
+
+适合问题：
+
+- 那天去某城市玩合适不合适
+- 明天会不会下雨
+- 未来几天冷不冷
+
+### 说明
+
+- 当前 Maps MCP 的 `search_places` 已可用，但 `compute_routes` 和 `lookup_weather` 在这台机器的 Codex 工具绑定里仍有参数编组兼容问题。
+- 因此目前更稳的方式是直接使用这组仓库内脚本。
+- 相关调查和参考见 [maps-mcp-notes.md](/root/lux4-codexbrain/docs/maps-mcp-notes.md)。
 
 ---
 

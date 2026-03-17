@@ -78,6 +78,7 @@ PYTHONPATH=src python3 -m lux4_daemon
 | `LUX4_CODEX_BINARY` | `codex` | Codex CLI 可执行文件路径 |
 | `LUX4_CODEX_MODEL` | 空 | 可选，显式指定 Codex model |
 | `LUX4_CODEX_TIMEOUT_SECONDS` | `120` | 单次 Codex 调用超时 |
+| `LUX4_DEBUG_SESSIONS` | `0` | 打开后输出会话续接调试日志 |
 | `CODEX_API_KEY` | 无 | Codex API key，会透传给 `codex exec` |
 | `LUX4_REQUEST_TIMEOUT_SECONDS` | `10` | reply 出站 HTTP 超时秒数 |
 
@@ -87,6 +88,7 @@ PYTHONPATH=src python3 -m lux4_daemon
 - 缺少任意一个时，daemon 会在启动时直接报错退出，不会进入“只接收入站不发 reply”的半工作状态。
 - `.env` 文件只补充缺失项，不覆盖已经存在的进程环境变量。
 - 如果本机没有可复用的 Codex 登录态，建议显式配置 `CODEX_API_KEY`。
+- `LUX4_DEBUG_SESSIONS=1` 时，会输出本轮使用的 `stored_codex_session_id`、返回的 `returned_codex_session_id`、是否尝试了 `resume`，以及是否发生了重建。
 
 ---
 
@@ -107,7 +109,17 @@ PYTHONPATH=src python3 -m lux4_daemon
 --sandbox danger-full-access
 ```
 
-也就是说，当前 Codex 运行在高权限模式下。这是有意配置，不是默认行为。
+这个高权限参数只用于新的 `codex exec` 会话启动。
+
+对已有会话的续接：
+
+```bash
+codex exec resume <SESSION_ID>
+```
+
+不会再错误附带 `--sandbox` 参数，否则 `resume` 会失败并触发会话重建。
+
+也就是说，当前 Codex 运行在高权限模式下是有意配置，但只适用于新会话启动，不适用于 `resume` 子命令。
 
 本地数据库默认在：
 

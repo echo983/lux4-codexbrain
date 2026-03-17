@@ -34,10 +34,30 @@ LUX4_CF_API_TOKEN='your-api-token' \
 PYTHONPATH=src python3 -m lux4_daemon
 ```
 
+也可以在当前运行目录放一个 `.env` 文件：
+
+```dotenv
+LUX4_CF_ACCOUNT_ID=your-account-id
+LUX4_CF_QUEUE_ID=your-queue-id
+LUX4_CF_API_TOKEN=your-api-token
+LUX4_PORT=18473
+```
+
+然后直接运行：
+
+```bash
+PYTHONPATH=src python3 -m lux4_daemon
+```
+
 默认监听：
 
 - Host: `0.0.0.0`
 - Port: `18473`
+
+配置读取顺序：
+
+1. 先读进程环境变量
+2. 如果某个配置项没有在进程环境里出现，再从当前运行目录的 `.env` 文件读取
 
 ---
 
@@ -57,6 +77,7 @@ PYTHONPATH=src python3 -m lux4_daemon
 
 - `LUX4_CF_ACCOUNT_ID`、`LUX4_CF_QUEUE_ID`、`LUX4_CF_API_TOKEN` 是启动必需项。
 - 缺少任意一个时，daemon 会在启动时直接报错退出，不会进入“只接收入站不发 reply”的半工作状态。
+- `.env` 文件只补充缺失项，不覆盖已经存在的进程环境变量。
 
 ---
 

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from lux4_daemon.config import Config
+from lux4_daemon.config import Config, load_dotenv_file
 from lux4_daemon.http import read_json_body
 from lux4_daemon.models import ReplyMessage
 from lux4_daemon.publisher import CloudflareQueueReplyPublisher
@@ -74,6 +74,44 @@ class ConfigShapeTest(unittest.TestCase):
     def test_startup_validation_requires_cloudflare_queue_config(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "LUX4_CF_ACCOUNT_ID, LUX4_CF_QUEUE_ID, LUX4_CF_API_TOKEN"):
             Config().validate_for_startup()
+
+    def test_loads_values_from_dotenv_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text(
+                "\n".join([
+                    "LUX4_CF_ACCOUNT_ID=acct-123",
+                    "LUX4_CF_QUEUE_ID='queue-456'",
+                    'LUX4_CF_API_TOKEN="token-789"',
+                ]),
+                encoding="utf-8",
+            )
+
+            values = load_dotenv_file(env_path)
+
+        self.assertEqual(values["LUX4_CF_ACCOUNT_ID"], "acct-123")
+        self.assertEqual(values["LUX4_CF_QUEUE_ID"], "queue-456")
+        self.assertEqual(values["LUX4_CF_API_TOKEN"], "token-789")
+
+    def test_process_env_overrides_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text(
+                "\n".join([
+                    "LUX4_CF_ACCOUNT_ID=acct-from-file",
+                    "LUX4_CF_QUEUE_ID=queue-from-file",
+                    "LUX4_CF_API_TOKEN=token-from-file",
+                ]),
+                encoding="utf-8",
+            )
+
+            with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
+                with mock.patch.dict("os.environ", {"LUX4_CF_QUEUE_ID": "queue-from-env"}, clear=False):
+                    config = Config.from_env()
+
+        self.assertEqual(config.cloudflare_account_id, "acct-from-file")
+        self.assertEqual(config.cloudflare_queue_id, "queue-from-env")
+        self.assertEqual(config.cloudflare_api_token, "token-from-file")
 
 
 class RequestBodyParsingTest(unittest.TestCase):

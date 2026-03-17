@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,7 @@ class ConfigShapeTest(unittest.TestCase):
     def test_config_defaults(self) -> None:
         config = Config()
         self.assertEqual(config.port, 18473)
+        self.assertEqual(config.codex_timeout_seconds, 240.0)
         self.assertFalse(config.debug_sessions)
         self.assertFalse(config.debug_codex_jsonl)
 
@@ -383,6 +385,20 @@ class CodexExecClientTest(unittest.TestCase):
             with self.assertRaises(CodexResumeError):
                 client.run_turn("reply please", session_id="thread-123")
 
+    def test_resume_timeout_raises_specific_error(self) -> None:
+        client = CodexExecClient(Config(
+            neo4j_uri="bolt://graph.example:7687",
+            neo4j_username="neo4j-user",
+            neo4j_password="secret-pass",
+            codex_timeout_seconds=12,
+        ))
+        with mock.patch(
+            "lux4_daemon.codex_exec.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["codex", "exec", "resume", "thread-123"], timeout=12),
+        ):
+            with self.assertRaisesRegex(CodexResumeError, "timed out after 12.0 seconds"):
+                client.run_turn("reply please", session_id="thread-123")
+
     def test_run_turn_fails_fast_when_neo4j_config_is_missing(self) -> None:
         client = CodexExecClient(Config())
 
@@ -423,6 +439,32 @@ class CodexResponderTest(unittest.TestCase):
             client = mock.Mock()
             client.run_turn.side_effect = [
                 CodexResumeError("resume failed"),
+                CodexTurnResult(session_id="thread-new", reply_text="fresh reply"),
+            ]
+            responder = CodexResponder(store=store, client=client)
+
+            result = responder.build_reply(message, session)
+            reset_session = store.get_session(message.session_key)
+
+        self.assertEqual(client.run_turn.call_count, 2)
+        self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "thread-old")
+        self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
+        assert reset_session is not None
+        self.assertIsNone(reset_session.active_codex_session_id)
+        self.assertEqual(reset_session.status, "reset_required")
+        self.assertEqual(result.codex_session_id, "thread-new")
+        self.assertTrue(result.resume_attempted)
+        self.assertTrue(result.resume_restarted)
+
+    def test_resume_timeout_clears_session_and_restarts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            store.get_or_create_session(message)
+            session = store.set_active_codex_session(message.session_key, "thread-old")
+            client = mock.Mock()
+            client.run_turn.side_effect = [
+                CodexResumeError("codex exec timed out after 240.0 seconds"),
                 CodexTurnResult(session_id="thread-new", reply_text="fresh reply"),
             ]
             responder = CodexResponder(store=store, client=client)

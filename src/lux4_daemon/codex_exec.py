@@ -49,15 +49,18 @@ class CodexExecClient:
     ) -> CodexTurnResult:
         output_path = self._make_output_path()
         command = self._build_command(prompt, output_path, session_id)
-        completed = subprocess.run(
-            command,
-            cwd=str(Path.cwd()),
-            env=self._build_env(context),
-            capture_output=True,
-            text=True,
-            timeout=self._timeout,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(Path.cwd()),
+                env=self._build_env(context),
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise self._build_timeout_error(session_id, exc) from exc
 
         stdout_text = completed.stdout
         stderr_text = completed.stderr
@@ -132,6 +135,15 @@ class CodexExecClient:
         if session_id:
             return CodexResumeError(message)
         return CodexExecError(message)
+
+    def _build_timeout_error(self, session_id: str | None, exc: subprocess.TimeoutExpired) -> CodexExecError:
+        detail = f"codex exec timed out after {self._timeout:.1f} seconds"
+        command = " ".join(str(part) for part in exc.cmd[:4]) if exc.cmd else ""
+        if command:
+            detail = f"{detail}: {command}"
+        if session_id:
+            return CodexResumeError(detail)
+        return CodexExecError(detail)
 
     def _make_output_path(self) -> Path:
         fd, raw_path = tempfile.mkstemp(prefix="lux4-codex-", suffix=".txt")

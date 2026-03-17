@@ -20,7 +20,7 @@ class Config:
     neo4j_username: str = ""
     neo4j_password: str = ""
     neo4j_database: str = ""
-    codex_timeout_seconds: float = 120.0
+    codex_timeout_seconds: float = 240.0
     debug_sessions: bool = False
     debug_codex_jsonl: bool = False
     debug_codex_jsonl_dir: str = "var/codex_jsonl"
@@ -43,7 +43,7 @@ class Config:
             neo4j_username=read_config_alias(("NEO4J_USERNAME", "NEO4J_USER"), dotenv_values, ""),
             neo4j_password=read_config_value("NEO4J_PASSWORD", dotenv_values, ""),
             neo4j_database=read_config_value("NEO4J_DATABASE", dotenv_values, ""),
-            codex_timeout_seconds=float(read_config_value("LUX4_CODEX_TIMEOUT_SECONDS", dotenv_values, "120")),
+            codex_timeout_seconds=float(read_config_value("LUX4_CODEX_TIMEOUT_SECONDS", dotenv_values, "240")),
             debug_sessions=read_config_flag("LUX4_DEBUG_SESSIONS", dotenv_values, False),
             debug_codex_jsonl=read_config_flag("LUX4_DEBUG_CODEX_JSONL", dotenv_values, False),
             debug_codex_jsonl_dir=read_config_value("LUX4_DEBUG_CODEX_JSONL_DIR", dotenv_values, "var/codex_jsonl"),

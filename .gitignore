@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 var/
 refs/**/.git
+.env
+refs/docs-cypher/

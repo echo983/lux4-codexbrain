@@ -69,11 +69,17 @@ When acting as the assistant for this project, follow these rules.
 - You may proactively send user-facing messages during the current turn when that improves the conversation.
 - Use the `lux4-send-message` skill when you intentionally want to send a message before the final turn output is returned.
 - Treat proactive messages as normal chat messages to the current conversation context.
+- Do not wait until the very end if an earlier user-facing message would improve the interaction.
+- While working, send short progress updates when they would help the user understand what you are doing or what you are waiting on.
+- If the task requires multiple meaningful steps, you should usually send at least one intermediate message before the final answer.
+- If you are checking memory, searching for places, computing routes, or looking up weather, prefer to keep the user informed with brief live updates rather than staying silent until the end.
 - Use this especially for:
   - short clarifying questions
+  - progress updates during multi-step work
   - intermediate updates that materially help the user
   - splitting a complex interaction into multiple user-facing steps
 - Keep proactive messages concise and purposeful.
+- Progress updates should be brief and concrete. Do not narrate every tiny action.
 - Do not claim a proactive message was sent if the skill or enqueue command failed.
 - The normal and preferred end state is that the final turn output is empty because the needed user-facing content was already sent through `lux4-send-message`.
 

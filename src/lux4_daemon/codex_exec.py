@@ -29,6 +29,10 @@ class CodexExecClient:
         self._binary = config.codex_binary
         self._model = config.codex_model
         self._api_key = config.codex_api_key
+        self._neo4j_uri = config.neo4j_uri
+        self._neo4j_username = config.neo4j_username
+        self._neo4j_password = config.neo4j_password
+        self._neo4j_database = config.neo4j_database
         self._timeout = config.codex_timeout_seconds
 
     def run_turn(self, prompt: str, session_id: str | None = None) -> CodexTurnResult:
@@ -65,7 +69,7 @@ class CodexExecClient:
             command = [self._binary, "exec", "resume", session_id]
         else:
             command = [self._binary, "exec"]
-            command.extend(["--sandbox", "danger-full-access"])
+            command.append("--full-auto")
 
         command.extend(["--json", "-o", str(output_path)])
         if self._model:
@@ -74,9 +78,28 @@ class CodexExecClient:
         return command
 
     def _build_env(self) -> dict[str, str]:
+        missing = []
+        if not self._neo4j_uri:
+            missing.append("NEO4J_URI or NEO4J_BOLT_URL")
+        if not self._neo4j_username:
+            missing.append("NEO4J_USERNAME or NEO4J_USER")
+        if not self._neo4j_password:
+            missing.append("NEO4J_PASSWORD")
+        if missing:
+            raise CodexExecError(
+                "Missing required Neo4j configuration. "
+                "Set it in the process environment or the current working directory .env file: "
+                + ", ".join(missing)
+            )
+
         env = os.environ.copy()
         if self._api_key and "CODEX_API_KEY" not in env:
             env["CODEX_API_KEY"] = self._api_key
+        env["NEO4J_URI"] = self._neo4j_uri
+        env["NEO4J_USERNAME"] = self._neo4j_username
+        env["NEO4J_PASSWORD"] = self._neo4j_password
+        if self._neo4j_database:
+            env["NEO4J_DATABASE"] = self._neo4j_database
         return env
 
     def _build_error(

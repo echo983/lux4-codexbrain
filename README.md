@@ -106,10 +106,10 @@ PYTHONPATH=src python3 -m lux4_daemon
 当前实现里，daemon 调用 Codex 时会显式带上：
 
 ```bash
---sandbox danger-full-access
+--full-auto
 ```
 
-这个高权限参数只用于新的 `codex exec` 会话启动。
+这个自动执行参数只用于新的 `codex exec` 会话启动。
 
 对已有会话的续接：
 
@@ -117,9 +117,9 @@ PYTHONPATH=src python3 -m lux4_daemon
 codex exec resume <SESSION_ID>
 ```
 
-不会再错误附带 `--sandbox` 参数，否则 `resume` 会失败并触发会话重建。
+不会再错误附带不兼容参数，否则 `resume` 会失败并触发会话重建。
 
-也就是说，当前 Codex 运行在高权限模式下是有意配置，但只适用于新会话启动，不适用于 `resume` 子命令。
+也就是说，当前 Codex 新会话以 `--full-auto` 启动，但 `resume` 子命令保持最小必要参数。
 
 本地数据库默认在：
 

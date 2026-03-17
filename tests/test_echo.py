@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from lux4_daemon.codex_exec import CodexExecClient, CodexResumeError, CodexTurnResult
+from lux4_daemon.codex_exec import CodexExecClient, CodexExecError, CodexResumeError, CodexTurnResult
 from lux4_daemon.config import Config, load_dotenv_file
 from lux4_daemon.http import read_json_body
 from lux4_daemon.models import ReplyMessage
@@ -121,6 +121,27 @@ class ConfigShapeTest(unittest.TestCase):
         self.assertEqual(config.cloudflare_account_id, "acct-from-file")
         self.assertEqual(config.cloudflare_queue_id, "queue-from-env")
         self.assertEqual(config.cloudflare_api_token, "token-from-file")
+
+    def test_loads_neo4j_values_from_dotenv_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text(
+                "\n".join([
+                    "NEO4J_BOLT_URL=bolt://graph.example:7687",
+                    "NEO4J_USER=neo4j-user",
+                    "NEO4J_PASSWORD=secret-pass",
+                    "NEO4J_DATABASE=neo4j",
+                ]),
+                encoding="utf-8",
+            )
+
+            with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
+                config = Config.from_env()
+
+        self.assertEqual(config.neo4j_uri, "bolt://graph.example:7687")
+        self.assertEqual(config.neo4j_username, "neo4j-user")
+        self.assertEqual(config.neo4j_password, "secret-pass")
+        self.assertEqual(config.neo4j_database, "neo4j")
 
     def test_reads_boolean_debug_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -238,15 +259,23 @@ class SessionStoreTest(unittest.TestCase):
 
 class CodexExecClientTest(unittest.TestCase):
     def test_run_turn_parses_thread_id_and_reply(self) -> None:
-        config = Config(codex_api_key="api-key")
+        config = Config(
+            codex_api_key="api-key",
+            neo4j_uri="bolt://graph.example:7687",
+            neo4j_username="neo4j-user",
+            neo4j_password="secret-pass",
+        )
         client = CodexExecClient(config)
 
         def fake_run(command, cwd, env, capture_output, text, timeout, check):
-            self.assertIn("--sandbox", command)
-            self.assertIn("danger-full-access", command)
+            self.assertIn("--full-auto", command)
+            self.assertNotIn("--sandbox", command)
             output_path = Path(command[command.index("-o") + 1])
             output_path.write_text("hello from codex\n", encoding="utf-8")
             self.assertEqual(env["CODEX_API_KEY"], "api-key")
+            self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
+            self.assertEqual(env["NEO4J_USERNAME"], "neo4j-user")
+            self.assertEqual(env["NEO4J_PASSWORD"], "secret-pass")
             return mock.Mock(
                 returncode=0,
                 stdout='{"type":"thread.started","thread_id":"thread-123"}\n',
@@ -260,7 +289,11 @@ class CodexExecClientTest(unittest.TestCase):
         self.assertEqual(result.reply_text, "hello from codex")
 
     def test_resume_command_does_not_include_sandbox_flag(self) -> None:
-        client = CodexExecClient(Config())
+        client = CodexExecClient(Config(
+            neo4j_uri="bolt://graph.example:7687",
+            neo4j_username="neo4j-user",
+            neo4j_password="secret-pass",
+        ))
 
         def fake_run(command, cwd, env, capture_output, text, timeout, check):
             self.assertNotIn("--sandbox", command)
@@ -280,13 +313,26 @@ class CodexExecClientTest(unittest.TestCase):
         self.assertEqual(result.reply_text, "hello again")
 
     def test_resume_failure_raises_specific_error(self) -> None:
-        client = CodexExecClient(Config())
+        client = CodexExecClient(Config(
+            neo4j_uri="bolt://graph.example:7687",
+            neo4j_username="neo4j-user",
+            neo4j_password="secret-pass",
+        ))
         with mock.patch(
             "lux4_daemon.codex_exec.subprocess.run",
             return_value=mock.Mock(returncode=1, stdout="", stderr="resume failed"),
         ):
             with self.assertRaises(CodexResumeError):
                 client.run_turn("reply please", session_id="thread-123")
+
+    def test_run_turn_fails_fast_when_neo4j_config_is_missing(self) -> None:
+        client = CodexExecClient(Config())
+
+        with mock.patch("lux4_daemon.codex_exec.subprocess.run") as run_mock:
+            with self.assertRaisesRegex(CodexExecError, "Missing required Neo4j configuration"):
+                client.run_turn("reply please")
+
+        run_mock.assert_not_called()
 
 
 class CodexResponderTest(unittest.TestCase):
@@ -336,16 +382,18 @@ class CodexResponderTest(unittest.TestCase):
         self.assertTrue(result.resume_attempted)
         self.assertTrue(result.resume_restarted)
 
-    def test_prompt_contains_timestamp_and_memory_rules(self) -> None:
+    def test_prompt_is_minimal_turn_input(self) -> None:
         responder = CodexResponder(store=mock.Mock(), client=mock.Mock())
         message = _build_incoming_message()
 
         prompt = responder._build_prompt(message)
 
         self.assertIn("Local timestamp: ", prompt)
-        self.assertIn("use the neo4j-cypher-ops skill", prompt)
-        self.assertIn("timestamp, confidence score, source_type, source_reference", prompt)
-        self.assertIn("user_explicit, user_implied, assistant_inferred, memory_retrieved, external", prompt)
+        self.assertIn("User ID: user-1", prompt)
+        self.assertIn("Username: alice", prompt)
+        self.assertIn("Latest user message:\nhello echo", prompt)
+        self.assertNotIn("You are Lux, an IM assistant.", prompt)
+        self.assertNotIn("neo4j-cypher-ops", prompt)
 
     def test_debug_logging_includes_session_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -66,8 +66,17 @@ When acting as the assistant for this project, follow these rules.
 
 ## Long-Term Memory
 
-- You are responsible for deciding whether long-term memory retrieval is needed before answering.
-- If existing long-term memory may materially improve the answer, use the `neo4j-cypher-ops` skill to retrieve it before replying.
+- Default to retrieving long-term memory before answering any user message.
+- Treat long-term memory retrieval as mandatory, not optional, unless one of the explicit skip conditions below applies.
+- Use the `neo4j-cypher-ops` skill to retrieve memory for the current `user_id` before drafting the reply.
+- When available, also use `username` and other stable identifiers only as secondary lookup keys for recall and conflict checking.
+- Retrieve memory first, then answer. Do not wait for the user to explicitly ask you to look up memory.
+- Skip retrieval only when:
+  - the user asks for a pure transformation of text they already provided, such as translation, rewriting, or summarization
+  - the user explicitly says not to use memory
+  - retrieval is unavailable or failing; in that case, answer without memory and do not pretend you checked it
+- After retrieval, use remembered facts and preferences proactively when they are relevant to the reply, even if the user did not mention them again in the current turn.
+- If no relevant memory is found, continue normally without mentioning the lookup.
 - Retrieved memory should be evaluated for recency, confidence, and possible conflicts.
 - Older or stale memory should have lower weight. Do not treat old uncertain memory as a certain fact.
 - If memory appears outdated, conflicting, incomplete, or too uncertain, prefer asking the user to confirm the important point instead of presenting it as established truth.

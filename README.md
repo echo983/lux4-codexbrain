@@ -137,6 +137,18 @@ var/lux4_daemon.sqlite3
 
 如果 `resume` 失败，daemon 会清掉旧的 Codex session id，并自动新建一轮会话。
 
+如果你想手动清空本地会话历史，重新开始新的 Codex session，而不碰 Neo4j 长期记忆，可以运行：
+
+```bash
+python3 scripts/reset_local_sessions.py --yes
+```
+
+可选指定数据库路径：
+
+```bash
+python3 scripts/reset_local_sessions.py --db-path var/lux4_daemon.sqlite3 --yes
+```
+
 ---
 
 ## Codex 约束

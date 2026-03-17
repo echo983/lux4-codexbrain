@@ -79,6 +79,7 @@ class ConfigShapeTest(unittest.TestCase):
         config = Config()
         self.assertEqual(config.port, 18473)
         self.assertFalse(config.debug_sessions)
+        self.assertFalse(config.debug_codex_jsonl)
 
     def test_startup_validation_requires_cloudflare_queue_config(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "LUX4_CF_ACCOUNT_ID, LUX4_CF_QUEUE_ID, LUX4_CF_API_TOKEN"):
@@ -146,12 +147,13 @@ class ConfigShapeTest(unittest.TestCase):
     def test_reads_boolean_debug_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env_path = Path(tmpdir) / ".env"
-            env_path.write_text("LUX4_DEBUG_SESSIONS=true\n", encoding="utf-8")
+            env_path.write_text("LUX4_DEBUG_SESSIONS=true\nLUX4_DEBUG_CODEX_JSONL=1\n", encoding="utf-8")
 
             with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
                 config = Config.from_env()
 
         self.assertTrue(config.debug_sessions)
+        self.assertTrue(config.debug_codex_jsonl)
 
 
 class RequestBodyParsingTest(unittest.TestCase):
@@ -287,6 +289,33 @@ class CodexExecClientTest(unittest.TestCase):
 
         self.assertEqual(result.session_id, "thread-123")
         self.assertEqual(result.reply_text, "hello from codex")
+
+    def test_writes_debug_jsonl_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Config(
+                neo4j_uri="bolt://graph.example:7687",
+                neo4j_username="neo4j-user",
+                neo4j_password="secret-pass",
+                debug_codex_jsonl=True,
+                debug_codex_jsonl_dir=tmpdir,
+            )
+            client = CodexExecClient(config)
+
+            def fake_run(command, cwd, env, capture_output, text, timeout, check):
+                output_path = Path(command[command.index("-o") + 1])
+                output_path.write_text("hello from codex\n", encoding="utf-8")
+                return mock.Mock(
+                    returncode=0,
+                    stdout='{"type":"thread.started","thread_id":"thread-123"}\n{"type":"turn.completed"}\n',
+                    stderr="",
+                )
+
+            with mock.patch("lux4_daemon.codex_exec.subprocess.run", side_effect=fake_run):
+                client.run_turn("reply please", debug_label="msg-1")
+
+            files = sorted(Path(tmpdir).glob("*.jsonl"))
+            self.assertEqual(len(files), 1)
+            self.assertIn('"thread_id":"thread-123"', files[0].read_text(encoding="utf-8"))
 
     def test_resume_command_does_not_include_sandbox_flag(self) -> None:
         client = CodexExecClient(Config(

@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, UTC
 from pathlib import Path
 
 from .config import Config
@@ -34,8 +35,16 @@ class CodexExecClient:
         self._neo4j_password = config.neo4j_password
         self._neo4j_database = config.neo4j_database
         self._timeout = config.codex_timeout_seconds
+        self._debug_codex_jsonl = config.debug_codex_jsonl
+        self._debug_codex_jsonl_dir = Path(config.debug_codex_jsonl_dir)
 
-    def run_turn(self, prompt: str, session_id: str | None = None) -> CodexTurnResult:
+    def run_turn(
+        self,
+        prompt: str,
+        session_id: str | None = None,
+        *,
+        debug_label: str | None = None,
+    ) -> CodexTurnResult:
         output_path = self._make_output_path()
         command = self._build_command(prompt, output_path, session_id)
         completed = subprocess.run(
@@ -50,6 +59,9 @@ class CodexExecClient:
 
         stdout_text = completed.stdout
         stderr_text = completed.stderr
+
+        if self._debug_codex_jsonl:
+            self._write_debug_jsonl(stdout_text, debug_label)
 
         if completed.returncode != 0:
             raise self._build_error(session_id, completed.returncode, stdout_text, stderr_text)
@@ -122,6 +134,13 @@ class CodexExecClient:
         os.close(fd)
         return Path(raw_path)
 
+    def _write_debug_jsonl(self, stdout_text: str, debug_label: str | None) -> None:
+        self._debug_codex_jsonl_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        safe_label = _sanitize_debug_label(debug_label or "turn")
+        path = self._debug_codex_jsonl_dir / f"{timestamp}-{safe_label}.jsonl"
+        path.write_text(stdout_text, encoding="utf-8")
+
 
 def _parse_thread_id(stdout_text: str) -> str | None:
     for line in stdout_text.splitlines():
@@ -143,3 +162,9 @@ def _truncate_for_error(text: str, limit: int = 400) -> str:
     if len(compact) <= limit:
         return compact
     return compact[:limit].rstrip() + "..."
+
+
+def _sanitize_debug_label(label: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in label.strip())
+    cleaned = cleaned.strip("-")
+    return cleaned or "turn"

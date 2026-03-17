@@ -16,8 +16,14 @@ class Config:
     codex_binary: str = "codex"
     codex_model: str = ""
     codex_api_key: str = ""
+    neo4j_uri: str = ""
+    neo4j_username: str = ""
+    neo4j_password: str = ""
+    neo4j_database: str = ""
     codex_timeout_seconds: float = 120.0
     debug_sessions: bool = False
+    debug_codex_jsonl: bool = False
+    debug_codex_jsonl_dir: str = "var/codex_jsonl"
     request_timeout_seconds: float = 10.0
 
     @classmethod
@@ -33,8 +39,14 @@ class Config:
             codex_binary=read_config_value("LUX4_CODEX_BINARY", dotenv_values, "codex"),
             codex_model=read_config_value("LUX4_CODEX_MODEL", dotenv_values, ""),
             codex_api_key=read_config_value("CODEX_API_KEY", dotenv_values, ""),
+            neo4j_uri=read_config_alias(("NEO4J_URI", "NEO4J_BOLT_URL"), dotenv_values, ""),
+            neo4j_username=read_config_alias(("NEO4J_USERNAME", "NEO4J_USER"), dotenv_values, ""),
+            neo4j_password=read_config_value("NEO4J_PASSWORD", dotenv_values, ""),
+            neo4j_database=read_config_value("NEO4J_DATABASE", dotenv_values, ""),
             codex_timeout_seconds=float(read_config_value("LUX4_CODEX_TIMEOUT_SECONDS", dotenv_values, "120")),
             debug_sessions=read_config_flag("LUX4_DEBUG_SESSIONS", dotenv_values, False),
+            debug_codex_jsonl=read_config_flag("LUX4_DEBUG_CODEX_JSONL", dotenv_values, False),
+            debug_codex_jsonl_dir=read_config_value("LUX4_DEBUG_CODEX_JSONL_DIR", dotenv_values, "var/codex_jsonl"),
             request_timeout_seconds=float(read_config_value("LUX4_REQUEST_TIMEOUT_SECONDS", dotenv_values, "10")),
         )
 
@@ -58,6 +70,18 @@ def read_config_value(key: str, dotenv_values: dict[str, str], default: str) -> 
     if value is not None:
         return value.strip()
     return dotenv_values.get(key, default).strip()
+
+
+def read_config_alias(keys: tuple[str, ...], dotenv_values: dict[str, str], default: str) -> str:
+    for key in keys:
+        value = os.getenv(key)
+        if value is not None:
+            return value.strip()
+    for key in keys:
+        value = dotenv_values.get(key)
+        if value is not None:
+            return value.strip()
+    return default.strip()
 
 
 def load_dotenv_file(path: Path) -> dict[str, str]:

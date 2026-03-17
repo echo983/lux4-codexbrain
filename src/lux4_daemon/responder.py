@@ -44,13 +44,13 @@ class CodexResponder:
 
         if current_session_id:
             try:
-                turn = self._client.run_turn(prompt, session_id=current_session_id)
+                turn = self._client.run_turn(prompt, session_id=current_session_id, debug_label=message.message_id)
             except CodexResumeError:
                 self._store.clear_active_codex_session(session.session_key)
                 resume_restarted = True
-                turn = self._client.run_turn(prompt)
+                turn = self._client.run_turn(prompt, debug_label=message.message_id)
         else:
-            turn = self._client.run_turn(prompt)
+            turn = self._client.run_turn(prompt, debug_label=message.message_id)
 
         if self._debug_sessions:
             LOGGER.info(

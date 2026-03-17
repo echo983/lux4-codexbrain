@@ -446,6 +446,10 @@ class CodexResponderTest(unittest.TestCase):
 
         prompt = responder._build_prompt(message)
 
+        self.assertIn(
+            "Delivery rule: any user-facing message must be sent via lux4-send-message. Final output is ignored.",
+            prompt,
+        )
         self.assertIn("Local timestamp: ", prompt)
         self.assertIn("Room ID: room-1", prompt)
         self.assertIn("User ID: user-1", prompt)

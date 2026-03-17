@@ -97,6 +97,7 @@ class CodexResponder:
     def _build_prompt(self, message: IncomingMessage) -> str:
         local_timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
         return "\n".join([
+            "Delivery rule: any user-facing message must be sent via lux4-send-message. Final output is ignored.",
             f"Local timestamp: {local_timestamp}",
             f"Room ID: {message.room_id}",
             f"User ID: {message.sender_user_id}",

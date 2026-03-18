@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -46,6 +47,11 @@ class KeepNoteSource:
     markdown: str
     markdown_fid: str
     snapshot_fid: str
+
+
+def make_card_id(path: str) -> str:
+    digest = hashlib.sha1(path.encode("utf-8")).hexdigest()[:16]
+    return f"keep_{digest}"
 
 
 def format_nbss_ref(fid: str) -> str:
@@ -119,7 +125,6 @@ def collect_keep_note_sources(snapshot_source: str, *, limit: int | None = None)
 
     json_paths = sorted(path for path in latest_by_path if path.endswith(".json"))
     items: list[KeepNoteSource] = []
-    index = 1
 
     for json_path in json_paths:
         html_path = re.sub(r"\.json$", ".html", json_path)
@@ -151,8 +156,7 @@ def collect_keep_note_sources(snapshot_source: str, *, limit: int | None = None)
         markdown_fid = md_put["fid"]
         note_title = str(raw_json.get("title") or "").strip() or Path(stem).name or "Untitled"
         created_at = parse_note_created_at(raw_json)
-        card_id = f"keep_{datetime.now(tz=UTC).strftime('%Y%m%d')}_{index:04d}"
-        index += 1
+        card_id = make_card_id(json_path)
 
         items.append(
             KeepNoteSource(
@@ -174,6 +178,82 @@ def collect_keep_note_sources(snapshot_source: str, *, limit: int | None = None)
             break
 
     return items
+
+
+def default_index_path(output_dir: Path | None, table: str) -> Path:
+    base = output_dir if output_dir is not None else Path("var")
+    return base / f".{table}.asset_index.json"
+
+
+def load_asset_index(index_path: Path) -> dict[str, dict[str, Any]]:
+    if not index_path.exists():
+        return {}
+    return json.loads(index_path.read_text(encoding="utf-8"))
+
+
+def build_note_signature(note: KeepNoteSource) -> dict[str, Any]:
+    return {
+        "card_id": note.card_id,
+        "path_in_snapshot": note.path,
+        "keep_json_fid": format_nbss_ref(note.json_fid),
+        "keep_html_fid": format_nbss_ref(note.html_fid),
+        "attachment_fids": [format_nbss_ref(fid) for fid in note.attachment_fids],
+        "source_snapshot_fid": note.snapshot_fid,
+        "note_title": note.note_title,
+        "created_at": note.created_at,
+    }
+
+
+def note_changed(note: KeepNoteSource, existing: dict[str, Any] | None) -> bool:
+    if not existing:
+        return True
+    current = build_note_signature(note)
+    for key in ("keep_json_fid", "keep_html_fid", "attachment_fids", "source_snapshot_fid", "note_title", "created_at"):
+        if existing.get(key) != current.get(key):
+            return True
+    return False
+
+
+def filter_changed_notes(
+    notes: list[KeepNoteSource],
+    *,
+    index: dict[str, dict[str, Any]],
+) -> tuple[list[KeepNoteSource], int]:
+    changed: list[KeepNoteSource] = []
+    skipped = 0
+    for note in notes:
+        if note_changed(note, index.get(note.path)):
+            changed.append(note)
+        else:
+            skipped += 1
+    return changed, skipped
+
+
+def update_asset_index(
+    *,
+    index_path: Path,
+    previous_index: dict[str, dict[str, Any]],
+    notes: list[KeepNoteSource],
+    cards: list[dict[str, Any]],
+) -> None:
+    by_id = {card["id"]: card for card in cards}
+    updated = dict(previous_index)
+    for note in notes:
+        card = by_id.get(note.card_id)
+        entry = build_note_signature(note)
+        if card is not None:
+            entry.update(
+                {
+                    "tags": card["metadata"].get("tags", []),
+                    "retrieval_terms": card["metadata"].get("retrieval_terms", []),
+                    "category_path": card["metadata"].get("category_path", ""),
+                    "priority": card["metadata"].get("priority", ""),
+                    "updated_at": datetime.now(tz=UTC).isoformat(),
+                }
+            )
+        updated[note.path] = entry
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def truncate_source_markdown(markdown: str, max_chars: int = MAX_SOURCE_CHARS) -> str:
@@ -495,12 +575,20 @@ def run_pipeline(
     generate_workers: int,
     embed_workers: int,
     output_dir: Path | None,
+    incremental: bool,
+    index_path: Path | None,
 ) -> dict[str, Any]:
     notes = collect_keep_note_sources(snapshot_source, limit=limit)
+    resolved_index_path = index_path or default_index_path(output_dir, table)
+    previous_index = load_asset_index(resolved_index_path) if incremental else {}
+    skipped_unchanged = 0
+    notes_to_process = notes
+    if incremental:
+        notes_to_process, skipped_unchanged = filter_changed_notes(notes, index=previous_index)
 
     generated_cards: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, generate_workers)) as executor:
-        futures = {executor.submit(generate_single_card, note): note for note in notes}
+        futures = {executor.submit(generate_single_card, note): note for note in notes_to_process}
         for future in as_completed(futures):
             generated_cards.append(future.result())
 
@@ -518,12 +606,22 @@ def run_pipeline(
             upserts.append(future.result())
 
     upserts.sort(key=lambda item: item["id"])
+    update_asset_index(
+        index_path=resolved_index_path,
+        previous_index=previous_index,
+        notes=notes_to_process,
+        cards=generated_cards,
+    )
     return {
         "snapshot_source": snapshot_source,
         "table": table,
         "notes_processed": len(notes),
+        "notes_selected_for_generation": len(notes_to_process),
+        "notes_skipped_unchanged": skipped_unchanged,
         "cards_generated": len(generated_cards),
         "upserts": upserts,
+        "incremental": incremental,
+        "index_path": str(resolved_index_path),
     }
 
 
@@ -535,6 +633,8 @@ def main() -> int:
     parser.add_argument("--generate-workers", type=int, default=DEFAULT_GENERATE_WORKERS)
     parser.add_argument("--embed-workers", type=int, default=DEFAULT_EMBED_WORKERS)
     parser.add_argument("--output-dir", default="var/google_keep_asset_cards")
+    parser.add_argument("--index-path", default="")
+    parser.add_argument("--full-refresh", action="store_true", help="Disable incremental filtering and regenerate all selected notes.")
     args = parser.parse_args()
 
     result = run_pipeline(
@@ -544,6 +644,8 @@ def main() -> int:
         generate_workers=args.generate_workers,
         embed_workers=args.embed_workers,
         output_dir=Path(args.output_dir) if args.output_dir else None,
+        incremental=not args.full_refresh,
+        index_path=Path(args.index_path) if args.index_path else None,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

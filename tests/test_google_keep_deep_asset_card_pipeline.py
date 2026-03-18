@@ -107,11 +107,24 @@ class GoogleKeepDeepAssetCardPipelineTests(unittest.TestCase):
             index={
                 "Example.json": {
                     "keep_json_fid": "NBSS:0xAAA",
-                    "keep_html_fid": "NBSS:0xBBB",
-                    "attachment_fids": ["NBSS:0xCCC"],
-                    "source_snapshot_fid": "NBSS:0xSNAP",
-                    "note_title": "Example Note",
-                    "created_at": "2026-03-18",
+                }
+            },
+        )
+        self.assertEqual(changed, [])
+        self.assertEqual(skipped, 1)
+
+    def test_filter_changed_notes_only_cares_about_keep_json_fid(self) -> None:
+        note = self.make_note()
+        changed, skipped = filter_changed_notes(
+            [note],
+            index={
+                "Example.json": {
+                    "keep_json_fid": "NBSS:0xAAA",
+                    "keep_html_fid": "NBSS:0xDIFFERENT",
+                    "attachment_fids": [],
+                    "source_snapshot_fid": "NBSS:0xOTHER",
+                    "note_title": "Different",
+                    "created_at": "2000-01-01",
                 }
             },
         )

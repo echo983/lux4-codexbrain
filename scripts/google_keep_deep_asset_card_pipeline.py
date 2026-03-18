@@ -207,11 +207,7 @@ def build_note_signature(note: KeepNoteSource) -> dict[str, Any]:
 def note_changed(note: KeepNoteSource, existing: dict[str, Any] | None) -> bool:
     if not existing:
         return True
-    current = build_note_signature(note)
-    for key in ("keep_json_fid", "keep_html_fid", "attachment_fids", "source_snapshot_fid", "note_title", "created_at"):
-        if existing.get(key) != current.get(key):
-            return True
-    return False
+    return existing.get("keep_json_fid") != format_nbss_ref(note.json_fid)
 
 
 def filter_changed_notes(

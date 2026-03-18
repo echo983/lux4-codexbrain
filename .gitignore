@@ -4,3 +4,4 @@ var/
 refs/**/.git
 .env
 refs/docs-cypher/
+refs/nbssUse/

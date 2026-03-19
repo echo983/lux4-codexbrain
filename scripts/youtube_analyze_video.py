@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -73,59 +75,90 @@ def analyze_text_content(source_text: str, *, source_label: str) -> str:
     return chat(prompt, system=ANALYSIS_SYSTEM, account_id=account_id, token=token, model=model)
 
 
+def nbss_text_url(fid: str, *, server_endpoint: str) -> str:
+    clean = fid[2:] if fid.startswith("0x") else fid
+    return f"{server_endpoint.rstrip('/')}/nbss/0x{clean}"
+
+
 def analyze_youtube_video(url: str, *, output_dir: Path) -> dict[str, Any]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    fetched = fetch_subtitles_or_audio(url, output_dir=output_dir / "fetch")
-    title = fetched.get("title") or fetched.get("video_id") or "video"
-    slug = sanitize_slug(str(fetched.get("video_id") or title))
     server_endpoint = resolve_nbss_server_endpoint()
-    transcript_text = ""
-    source_label = ""
-    vad_table_fid = ""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = Path(tempfile.mkdtemp(prefix="youtube-analysis-", dir=output_dir))
+    try:
+        fetched = fetch_subtitles_or_audio(url, output_dir=work_dir / "fetch")
+        title = fetched.get("title") or fetched.get("video_id") or "video"
+        slug = sanitize_slug(str(fetched.get("video_id") or title))
+        transcript_text = ""
+        source_label = ""
+        vad_table_fid = ""
+        source_audio_fid = ""
 
-    if fetched["mode"] == "subtitle":
-        subtitle_path = Path(fetched["path"])
-        transcript_text = subtitle_path.read_text(encoding="utf-8", errors="replace")
-        source_label = f"{fetched['subtitle_kind']} subtitle ({fetched['subtitle_language']})"
-    else:
-        audio_path = Path(fetched["path"])
-        audio_put = nbss_put_bytes(audio_path.read_bytes(), server_endpoint=server_endpoint, content_type="audio/webm")
-        command = [
-            "python3",
-            "scripts/nbss_vad_table_builder.py",
-            audio_put["fid"],
-            "--original-path",
-            audio_path.name,
-        ]
-        completed = subprocess.run(command, text=True, capture_output=True, check=False)
-        if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "nbss_vad_table_builder failed")
-        result = json.loads(completed.stdout.strip())
-        vad_table_fid = result["vad_table_fid"]
-        vad_table = load_vad_table(vad_table_fid, server_endpoint=server_endpoint)
-        transcript_text = build_transcript_from_vad_table(vad_table)
-        source_label = f"audio transcription via AudioVADTable ({vad_table_fid})"
+        if fetched["mode"] == "subtitle":
+            subtitle_path = Path(fetched["path"])
+            transcript_text = subtitle_path.read_text(encoding="utf-8", errors="replace")
+            source_label = f"{fetched['subtitle_kind']} subtitle ({fetched['subtitle_language']})"
+        else:
+            audio_path = Path(fetched["path"])
+            audio_put = nbss_put_bytes(audio_path.read_bytes(), server_endpoint=server_endpoint, content_type="audio/webm")
+            source_audio_fid = audio_put["fid"]
+            command = [
+                "python3",
+                "scripts/nbss_vad_table_builder.py",
+                source_audio_fid,
+                "--original-path",
+                audio_path.name,
+            ]
+            completed = subprocess.run(command, text=True, capture_output=True, check=False)
+            if completed.returncode != 0:
+                raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "nbss_vad_table_builder failed")
+            vad_result = json.loads(completed.stdout.strip())
+            vad_table_fid = vad_result["vad_table_fid"]
+            vad_table = load_vad_table(vad_table_fid, server_endpoint=server_endpoint)
+            transcript_text = build_transcript_from_vad_table(vad_table)
+            source_label = f"audio transcription via AudioVADTable ({vad_table_fid})"
 
-    analysis_md = analyze_text_content(transcript_text, source_label=source_label)
-    transcript_path = output_dir / f"{slug}.transcript.txt"
-    analysis_path = output_dir / f"{slug}.analysis.md"
-    meta_path = output_dir / f"{slug}.json"
-    transcript_path.write_text(transcript_text, encoding="utf-8")
-    analysis_path.write_text(analysis_md, encoding="utf-8")
-    result = {
-        "url": url,
-        "title": title,
-        "video_id": fetched.get("video_id"),
-        "mode": fetched["mode"],
-        "source_label": source_label,
-        "fetched_path": fetched["path"],
-        "transcript_path": str(transcript_path),
-        "analysis_path": str(analysis_path),
-        "vad_table_fid": vad_table_fid,
-    }
-    meta_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    result["meta_path"] = str(meta_path)
-    return result
+        analysis_md = analyze_text_content(transcript_text, source_label=source_label)
+        transcript_put = nbss_put_bytes(
+            transcript_text.encode("utf-8"),
+            server_endpoint=server_endpoint,
+            content_type="text/plain; charset=utf-8",
+        )
+        analysis_put = nbss_put_bytes(
+            analysis_md.encode("utf-8"),
+            server_endpoint=server_endpoint,
+            content_type="text/markdown; charset=utf-8",
+        )
+        result = {
+            "url": url,
+            "title": title,
+            "video_id": fetched.get("video_id"),
+            "mode": fetched["mode"],
+            "source_label": source_label,
+            "subtitle_kind": fetched.get("subtitle_kind", ""),
+            "subtitle_language": fetched.get("subtitle_language", ""),
+            "source_audio_fid": source_audio_fid,
+            "vad_table_fid": vad_table_fid,
+            "transcript_fid": transcript_put["fid"],
+            "transcript_url": nbss_text_url(transcript_put["fid"], server_endpoint=server_endpoint),
+            "analysis_fid": analysis_put["fid"],
+            "analysis_url": nbss_text_url(analysis_put["fid"], server_endpoint=server_endpoint),
+        }
+        meta_put = nbss_put_bytes(
+            json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"),
+            server_endpoint=server_endpoint,
+            content_type="application/json; charset=utf-8",
+        )
+        result["meta_fid"] = meta_put["fid"]
+        result["meta_url"] = nbss_text_url(meta_put["fid"], server_endpoint=server_endpoint)
+        result["local_artifacts_retained"] = False
+        return result
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        try:
+            if output_dir.exists() and not any(output_dir.iterdir()):
+                output_dir.rmdir()
+        except OSError:
+            pass
 
 
 def main() -> int:

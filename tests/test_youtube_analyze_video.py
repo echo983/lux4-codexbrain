@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -27,19 +28,30 @@ class YouTubeAnalyzeVideoTests(unittest.TestCase):
                     "path": str(subtitle_path),
                 },
             ):
-                with mock.patch(
-                    "scripts.youtube_analyze_video.analyze_text_content",
-                    return_value="# 分析\n\n这是一段测试分析。",
-                ):
-                    result = analyze_youtube_video("https://example.com/watch?v=abc123", output_dir=output_dir)
+                uploaded_payloads: list[tuple[bytes, str]] = []
+
+                def fake_put(data, *, server_endpoint, content_type):
+                    uploaded_payloads.append((data, content_type))
+                    return {"fid": f"0xFID{len(uploaded_payloads)}"}
+
+                with mock.patch("scripts.youtube_analyze_video.nbss_put_bytes", side_effect=fake_put):
+                    with mock.patch(
+                        "scripts.youtube_analyze_video.analyze_text_content",
+                        return_value="# 分析\n\n这是一段测试分析。",
+                    ):
+                        result = analyze_youtube_video("https://example.com/watch?v=abc123", output_dir=output_dir)
 
             self.assertEqual(result["mode"], "subtitle")
             self.assertEqual(result["video_id"], "abc123")
             self.assertEqual(result["vad_table_fid"], "")
-            self.assertTrue(Path(result["transcript_path"]).exists())
-            self.assertTrue(Path(result["analysis_path"]).exists())
-            self.assertIn("hello world", Path(result["transcript_path"]).read_text(encoding="utf-8"))
-            self.assertIn("测试分析", Path(result["analysis_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(result["transcript_fid"], "0xFID1")
+            self.assertEqual(result["analysis_fid"], "0xFID2")
+            self.assertEqual(result["meta_fid"], "0xFID3")
+            self.assertFalse(output_dir.exists())
+            self.assertIn("hello world", uploaded_payloads[0][0].decode("utf-8"))
+            self.assertIn("测试分析", uploaded_payloads[1][0].decode("utf-8"))
+            meta = json.loads(uploaded_payloads[2][0].decode("utf-8"))
+            self.assertEqual(meta["analysis_fid"], "0xFID2")
 
     def test_analyze_video_with_audio_fallback(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -63,9 +75,15 @@ class YouTubeAnalyzeVideoTests(unittest.TestCase):
                     "path": str(audio_path),
                 },
             ):
+                uploaded_payloads: list[tuple[bytes, str]] = []
+
+                def fake_put(data, *, server_endpoint, content_type):
+                    uploaded_payloads.append((data, content_type))
+                    return {"fid": f"0xFID{len(uploaded_payloads)}"}
+
                 with mock.patch(
                     "scripts.youtube_analyze_video.nbss_put_bytes",
-                    return_value={"fid": "0xAUDIOFID"},
+                    side_effect=fake_put,
                 ):
                     with mock.patch(
                         "scripts.youtube_analyze_video.subprocess.run",
@@ -87,8 +105,13 @@ class YouTubeAnalyzeVideoTests(unittest.TestCase):
 
             self.assertEqual(result["mode"], "audio")
             self.assertEqual(result["vad_table_fid"], "0xVADFID")
-            self.assertIn("第一句", Path(result["transcript_path"]).read_text(encoding="utf-8"))
-            self.assertIn("音频回退测试", Path(result["analysis_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(result["source_audio_fid"], "0xFID1")
+            self.assertEqual(result["transcript_fid"], "0xFID2")
+            self.assertEqual(result["analysis_fid"], "0xFID3")
+            self.assertEqual(result["meta_fid"], "0xFID4")
+            self.assertFalse(output_dir.exists())
+            self.assertIn("第一句", uploaded_payloads[1][0].decode("utf-8"))
+            self.assertIn("音频回退测试", uploaded_payloads[2][0].decode("utf-8"))
 
 
 if __name__ == "__main__":

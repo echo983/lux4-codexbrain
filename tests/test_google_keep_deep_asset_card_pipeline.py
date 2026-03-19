@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,13 +7,13 @@ from unittest import mock
 
 from scripts.google_keep_deep_asset_card_pipeline import (
     KeepNoteSource,
+    build_card_frontmatter,
     build_card_generation_prompt,
     filter_changed_notes,
+    generate_single_card,
     make_card_id,
-    normalize_generated_card,
-    parse_card_json_response,
-    render_card_markdown,
     run_pipeline,
+    truncate_card_body,
     truncate_source_markdown,
 )
 
@@ -41,66 +40,25 @@ class GoogleKeepDeepAssetCardPipelineTests(unittest.TestCase):
         self.assertIn("[...TRUNCATED FOR CARD GENERATION...]", truncated)
         self.assertLessEqual(len(truncated), 1000 + 80)
 
-    def test_build_prompt_includes_required_fids(self) -> None:
+    def test_truncate_card_body(self) -> None:
+        text = "b" * 30000
+        truncated = truncate_card_body(text)
+        self.assertIn("[TRUNCATED]", truncated)
+        self.assertLessEqual(len(truncated), 28000)
+
+    def test_build_prompt_includes_required_fids_and_source(self) -> None:
         prompt = build_card_generation_prompt(self.make_note())
-        self.assertIn("keep_json_fid", prompt)
-        self.assertIn("keep_md_fid", prompt)
-        self.assertIn("keep_html_fid", prompt)
+        self.assertIn("path_in_snapshot: Example.json", prompt)
+        self.assertIn("Source markdown", prompt)
+        self.assertIn("Output markdown only", prompt)
 
-    def test_render_card_markdown_includes_metadata(self) -> None:
-        markdown = render_card_markdown(
-            self.make_note(),
-            {
-                "title": "Rendered Title",
-                "tags": ["a", "b"],
-                "retrieval_terms": ["x", "y"],
-                "category_path": "知识/样例",
-                "priority": "决策参考",
-                "core_view": "核心观点",
-                "intent": "意图识别",
-                "cognitive_asset": "认知资产",
-                "raw_content_md": "- 项目一",
-                "mentioned_entities": ["实体A"],
-                "related_scenarios": ["场景A"],
-                "source_context": "Google Keep",
-            },
-        )
-        self.assertIn("source_snapshot_fid: NBSS:0xSNAP", markdown)
-        self.assertIn("keep_md_fid: NBSS:0xDDD", markdown)
-        self.assertIn("# Rendered Title", markdown)
-        self.assertIn("## 🔍 召回增强", markdown)
+    def test_build_card_frontmatter_includes_required_metadata(self) -> None:
+        frontmatter = build_card_frontmatter(self.make_note())
+        self.assertIn("source_snapshot_fid: NBSS:0xSNAP", frontmatter)
+        self.assertIn("keep_md_fid: NBSS:0xDDD", frontmatter)
+        self.assertIn('path_in_snapshot: "Example.json"', frontmatter)
 
-    def test_normalize_generated_card_normalizes_priority_and_category(self) -> None:
-        normalized = normalize_generated_card(
-            self.make_note(),
-            {
-                "title": "Example",
-                "tags": ["A", "a", "B"],
-                "retrieval_terms": ["One", "One", "Two"],
-                "category_path": "['Security', 'Credentials', 'Password Storage']",
-                "priority": "5",
-                "core_view": "technical_specification",
-                "intent": "constraint_for_text",
-                "cognitive_asset": "",
-                "raw_content_md": "",
-                "mentioned_entities": ["X", "X", "Y"],
-                "related_scenarios": ["S1", "S1", "S2"],
-                "source_context": "",
-            },
-        )
-        self.assertEqual(normalized["priority"], "low")
-        self.assertEqual(normalized["category_path"], "security/credentials/password-storage")
-        self.assertEqual(normalized["tags"], ["a", "b"])
-        self.assertEqual(normalized["retrieval_terms"], ["One", "Two"])
-        self.assertNotEqual(normalized["core_view"], "technical_specification")
-        self.assertNotEqual(normalized["intent"], "constraint_for_text")
-        self.assertTrue(normalized["raw_content_md"])
-
-    def test_parse_card_json_response_extracts_embedded_json(self) -> None:
-        parsed = parse_card_json_response('prefix {"title":"x","tags":[],"retrieval_terms":[]} suffix')
-        self.assertEqual(parsed["title"], "x")
-
-    def test_filter_changed_notes_skips_same_signature(self) -> None:
+    def test_filter_changed_notes_skips_same_keep_json_fid(self) -> None:
         note = self.make_note()
         changed, skipped = filter_changed_notes(
             [note],
@@ -131,11 +89,32 @@ class GoogleKeepDeepAssetCardPipelineTests(unittest.TestCase):
         self.assertEqual(changed, [])
         self.assertEqual(skipped, 1)
 
+    def test_generate_single_card_retries_only_on_call_failure(self) -> None:
+        note = self.make_note()
+        with mock.patch(
+            "scripts.google_keep_deep_asset_card_pipeline.generate_card_body_once",
+            side_effect=[RuntimeError("temporary"), "# Example Note\n\nCard body"],
+        ):
+            card = generate_single_card(note)
+        self.assertEqual(card["id"], note.card_id)
+        self.assertIn("# Example Note", card["card_markdown"])
+        self.assertIn("keep_json_fid: NBSS:0xAAA", card["card_markdown"])
+
+    def test_generate_single_card_keeps_returned_content_as_is(self) -> None:
+        note = self.make_note()
+        raw_body = "# Odd Card\n\nThis is imperfect but non-empty.\n\n- weird"
+        with mock.patch(
+            "scripts.google_keep_deep_asset_card_pipeline.generate_card_body_once",
+            return_value=raw_body,
+        ):
+            card = generate_single_card(note)
+        self.assertIn(raw_body, card["card_markdown"])
+
     def test_run_pipeline_writes_cards_and_collects_upserts(self) -> None:
         note = self.make_note()
         card_entry = {
             "id": note.card_id,
-            "card_markdown": "# Card\n",
+            "card_markdown": "---\nid: x\n---\n\n# Card\n",
             "metadata": {"source_type": "google_keep"},
         }
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -147,6 +126,7 @@ class GoogleKeepDeepAssetCardPipelineTests(unittest.TestCase):
                             "NBSS:0xSNAP",
                             table="cards",
                             limit=1,
+                            prepare_workers=1,
                             generate_workers=1,
                             embed_workers=1,
                             output_dir=output_dir,

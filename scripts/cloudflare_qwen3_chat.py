@@ -110,6 +110,48 @@ def chat(prompt: str, *, system: str, account_id: str, token: str, model: str) -
     return content
 
 
+def chat_completion_data(prompt: str, *, system: str, account_id: str, token: str, model: str) -> dict:
+    if not account_id:
+        raise RuntimeError("Missing Cloudflare account id. Set CF_ACCOUNT_ID or LUX4_CF_ACCOUNT_ID.")
+    if not token:
+        raise RuntimeError("Missing Cloudflare auth token. Set CF_AUTH_TOKEN or LUX4_CF_API_TOKEN.")
+    if not prompt.strip():
+        raise RuntimeError("Provide a non-empty prompt.")
+
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
+    payload = json.dumps(
+        {
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ]
+        }
+    ).encode("utf-8")
+    req = request.Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with request.urlopen(req, timeout=120) as response:
+            body = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Cloudflare Qwen request failed with HTTP {exc.code}: {detail}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Cloudflare Qwen request failed: {exc}") from exc
+
+    data = json.loads(body)
+    if not data.get("success"):
+        raise RuntimeError(f"Cloudflare Qwen request was not successful: {data.get('errors')}")
+    return data
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Call Cloudflare Workers AI Qwen3 chat model.")
     parser.add_argument("prompt", nargs="*", help="User prompt text.")

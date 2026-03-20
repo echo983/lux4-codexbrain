@@ -13,6 +13,8 @@
 
 此外，仓库现在还提供一组直接调用 Google Maps / Weather API 的原语脚本，给后续 skill 和日常地图问答使用。
 
+仓库也提供了用于解析 NBSS 导出结构的原语脚本，包括 notFinder LLM 文本快照和 PVLog head 二进制快照入口。
+
 ---
 
 ## 当前状态
@@ -26,6 +28,9 @@
 - 已实现 reply 出站推送
 - reply 出站目标固定为 Cloudflare Queue push API
 - 助手行为由项目根目录 [AGENT.md](/root/lux4-codexbrain/AGENT.md) 约束
+- 已实现 2 个 NBSS / PVLog 解析原语：
+  - [parse_notfinder_llm_snapshot.py](/root/lux4-codexbrain/scripts/parse_notfinder_llm_snapshot.py)
+  - [parse_pvlog_head.py](/root/lux4-codexbrain/scripts/parse_pvlog_head.py)
 - 已实现 5 个 Google 地图原语脚本：
   - [google_places_search.py](/root/lux4-codexbrain/scripts/google_places_search.py)
   - [google_place_details.py](/root/lux4-codexbrain/scripts/google_place_details.py)
@@ -126,6 +131,29 @@ GOOGLE_MAPS_API_KEY=your-google-maps-api-key
 - `Geocoding API`
 - `Routes API`
 - `Weather API`
+
+---
+
+## NBSS / PVLog 原语脚本
+
+当前仓库里和 NBSS 文件世界相关的两个直接入口：
+
+- notFinder 文本快照解析：[parse_notfinder_llm_snapshot.py](/root/lux4-codexbrain/scripts/parse_notfinder_llm_snapshot.py)
+- PVLog head 二进制解析：[parse_pvlog_head.py](/root/lux4-codexbrain/scripts/parse_pvlog_head.py)
+
+对应说明文档：
+
+- [notfinder-llm-snapshot.md](/root/lux4-codexbrain/docs/notfinder-llm-snapshot.md)
+- [pvlog-head.md](/root/lux4-codexbrain/docs/pvlog-head.md)
+
+示例：
+
+```bash
+python3 scripts/parse_notfinder_llm_snapshot.py NBSS:0xC0D5E78ED81CE90F --summary-only
+python3 scripts/parse_pvlog_head.py inspect 0xD2F8984FDFC41007
+python3 scripts/parse_pvlog_head.py list 0xD2F8984FDFC41007
+python3 scripts/parse_pvlog_head.py read 0xD2F8984FDFC41007 ".notFinder/me"
+```
 
 ### 1. 地点搜索
 

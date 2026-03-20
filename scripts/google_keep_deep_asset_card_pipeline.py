@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -48,6 +49,84 @@ class KeepNoteSource:
     markdown: str
     markdown_fid: str
     snapshot_fid: str
+
+
+@dataclass
+class PipelineProgress:
+    path: Path
+    snapshot_source: str
+    table: str
+    started_at: str
+    notes_processed: int
+    notes_selected_for_generation: int
+    notes_skipped_unchanged: int
+    generated: int = 0
+    upserted: int = 0
+    failed: int = 0
+    status: str = "running"
+    last_generated_path: str = ""
+    last_upserted_path: str = ""
+    last_error_path: str = ""
+    last_error: str = ""
+    recent_generated_paths: deque[str] | None = None
+    recent_upserted_paths: deque[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.recent_generated_paths is None:
+            self.recent_generated_paths = deque(maxlen=10)
+        if self.recent_upserted_paths is None:
+            self.recent_upserted_paths = deque(maxlen=10)
+        self.write()
+
+    def _payload(self) -> dict[str, Any]:
+        return {
+            "snapshot_source": self.snapshot_source,
+            "table": self.table,
+            "started_at": self.started_at,
+            "updated_at": datetime.now(tz=UTC).isoformat(),
+            "status": self.status,
+            "notes_processed": self.notes_processed,
+            "notes_selected_for_generation": self.notes_selected_for_generation,
+            "notes_skipped_unchanged": self.notes_skipped_unchanged,
+            "generated": self.generated,
+            "upserted": self.upserted,
+            "failed": self.failed,
+            "last_generated_path": self.last_generated_path,
+            "last_upserted_path": self.last_upserted_path,
+            "last_error_path": self.last_error_path,
+            "last_error": self.last_error,
+            "recent_generated_paths": list(self.recent_generated_paths or []),
+            "recent_upserted_paths": list(self.recent_upserted_paths or []),
+        }
+
+    def write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self._payload(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def mark_generated(self, note: KeepNoteSource) -> None:
+        self.generated += 1
+        self.last_generated_path = note.path
+        if self.recent_generated_paths is not None:
+            self.recent_generated_paths.append(note.path)
+        self.write()
+
+    def mark_upserted(self, note: KeepNoteSource) -> None:
+        self.upserted += 1
+        self.last_upserted_path = note.path
+        if self.recent_upserted_paths is not None:
+            self.recent_upserted_paths.append(note.path)
+        self.write()
+
+    def mark_failed(self, note: KeepNoteSource | None, exc: Exception) -> None:
+        self.failed += 1
+        self.status = "failed"
+        self.last_error_path = note.path if note is not None else ""
+        self.last_error = str(exc)
+        self.write()
+
+    def mark_completed(self) -> None:
+        self.status = "completed"
+        self.write()
 
 
 def make_card_id(path: str) -> str:
@@ -207,6 +286,11 @@ def default_index_path(output_dir: Path | None, table: str) -> Path:
     return base / f".{table}.asset_index.json"
 
 
+def default_progress_path(output_dir: Path | None, table: str) -> Path:
+    base = output_dir if output_dir is not None else Path("var")
+    return base / f".{table}.progress.json"
+
+
 def load_asset_index(index_path: Path) -> dict[str, dict[str, Any]]:
     if not index_path.exists():
         return {}
@@ -253,7 +337,7 @@ def update_asset_index(
     previous_index: dict[str, dict[str, Any]],
     notes: list[KeepNoteSource],
     cards: list[dict[str, Any]],
-) -> None:
+) -> dict[str, dict[str, Any]]:
     by_id = {card["id"]: card for card in cards}
     updated = dict(previous_index)
     for note in notes:
@@ -272,6 +356,7 @@ def update_asset_index(
         updated[note.path] = entry
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return updated
 
 
 def truncate_source_markdown(markdown: str, max_chars: int = MAX_SOURCE_CHARS) -> str:
@@ -450,41 +535,71 @@ def run_pipeline(
     output_dir: Path | None,
     incremental: bool,
     index_path: Path | None,
+    progress_path: Path | None,
 ) -> dict[str, Any]:
     notes = collect_keep_note_sources(snapshot_source, limit=limit, prepare_workers=prepare_workers)
     resolved_index_path = index_path or default_index_path(output_dir, table)
+    resolved_progress_path = progress_path or default_progress_path(output_dir, table)
     previous_index = load_asset_index(resolved_index_path) if incremental else {}
     skipped_unchanged = 0
     notes_to_process = notes
     if incremental:
         notes_to_process, skipped_unchanged = filter_changed_notes(notes, index=previous_index)
 
+    progress = PipelineProgress(
+        path=resolved_progress_path,
+        snapshot_source=snapshot_source,
+        table=table,
+        started_at=datetime.now(tz=UTC).isoformat(),
+        notes_processed=len(notes),
+        notes_selected_for_generation=len(notes_to_process),
+        notes_skipped_unchanged=skipped_unchanged,
+    )
+
     generated_cards: list[dict[str, Any]] = []
+    generated_by_id: dict[str, dict[str, Any]] = {}
+    note_by_card_id: dict[str, KeepNoteSource] = {}
     with ThreadPoolExecutor(max_workers=max(1, generate_workers)) as executor:
         futures = {executor.submit(generate_single_card, note): note for note in notes_to_process}
         for future in as_completed(futures):
-            generated_cards.append(future.result())
+            note = futures[future]
+            try:
+                card = future.result()
+            except Exception as exc:
+                progress.mark_failed(note, exc)
+                raise
+            generated_cards.append(card)
+            generated_by_id[card["id"]] = card
+            note_by_card_id[card["id"]] = note
+            if output_dir is not None:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                (output_dir / f"{card['id']}.md").write_text(card["card_markdown"], encoding="utf-8")
+            progress.mark_generated(note)
 
     generated_cards.sort(key=lambda item: item["id"])
-
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for card in generated_cards:
-            (output_dir / f"{card['id']}.md").write_text(card["card_markdown"], encoding="utf-8")
 
     upserts: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, embed_workers)) as executor:
         futures = {executor.submit(embed_and_upsert_single, card, table=table): card for card in generated_cards}
         for future in as_completed(futures):
-            upserts.append(future.result())
+            card = futures[future]
+            note = note_by_card_id[card["id"]]
+            try:
+                result = future.result()
+            except Exception as exc:
+                progress.mark_failed(note, exc)
+                raise
+            upserts.append(result)
+            previous_index = update_asset_index(
+                index_path=resolved_index_path,
+                previous_index=previous_index,
+                notes=[note],
+                cards=[generated_by_id[card["id"]]],
+            )
+            progress.mark_upserted(note)
 
     upserts.sort(key=lambda item: item["id"])
-    update_asset_index(
-        index_path=resolved_index_path,
-        previous_index=previous_index,
-        notes=notes_to_process,
-        cards=generated_cards,
-    )
+    progress.mark_completed()
     return {
         "snapshot_source": snapshot_source,
         "table": table,
@@ -495,6 +610,7 @@ def run_pipeline(
         "upserts": upserts,
         "incremental": incremental,
         "index_path": str(resolved_index_path),
+        "progress_path": str(resolved_progress_path),
     }
 
 
@@ -508,6 +624,7 @@ def main() -> int:
     parser.add_argument("--embed-workers", type=int, default=DEFAULT_EMBED_WORKERS)
     parser.add_argument("--output-dir", default="var/google_keep_asset_cards")
     parser.add_argument("--index-path", default="")
+    parser.add_argument("--progress-path", default="")
     parser.add_argument("--full-refresh", action="store_true", help="Disable incremental filtering and regenerate all selected notes.")
     args = parser.parse_args()
 
@@ -521,6 +638,7 @@ def main() -> int:
         output_dir=Path(args.output_dir) if args.output_dir else None,
         incremental=not args.full_refresh,
         index_path=Path(args.index_path) if args.index_path else None,
+        progress_path=Path(args.progress_path) if args.progress_path else None,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

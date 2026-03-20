@@ -132,6 +132,7 @@ class GoogleKeepDeepAssetCardPipelineTests(unittest.TestCase):
                             output_dir=output_dir,
                             incremental=True,
                             index_path=output_dir / ".cards.asset_index.json",
+                            progress_path=output_dir / ".cards.progress.json",
                         )
                         self.assertEqual(result["notes_processed"], 1)
                         self.assertEqual(result["notes_selected_for_generation"], 1)
@@ -139,6 +140,12 @@ class GoogleKeepDeepAssetCardPipelineTests(unittest.TestCase):
                         self.assertEqual(result["upserts"][0]["rows_written"], 1)
                         self.assertTrue((output_dir / f"{note.card_id}.md").exists())
                         self.assertTrue((output_dir / ".cards.asset_index.json").exists())
+                        progress_path = output_dir / ".cards.progress.json"
+                        self.assertTrue(progress_path.exists())
+                        progress = progress_path.read_text(encoding="utf-8")
+                        self.assertIn('"status": "completed"', progress)
+                        self.assertIn('"generated": 1', progress)
+                        self.assertIn('"upserted": 1', progress)
 
 
 if __name__ == "__main__":

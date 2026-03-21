@@ -6,7 +6,7 @@ import logging
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlencode
 
 from .config import Config
 from .search import search_keep_cards
@@ -26,13 +26,46 @@ def _parse_tag_values(values: list[str]) -> list[str]:
 
 
 def _build_page_url(query: str, tags: list[str], page: int, min_score: float) -> str:
-    tag_param = ",".join(tags)
-    return (
-        f"/search?q={html.escape(query)}"
-        f"&tag={html.escape(tag_param)}"
-        f"&page={page}"
-        f"&min_score={min_score:g}"
-    )
+    params: dict[str, Any] = {"q": query}
+    if tags:
+        params["tag"] = ",".join(tags)
+    if page > 1:
+        params["page"] = page
+    params["min_score"] = f"{min_score:g}"
+    return f"/search?{urlencode(params)}"
+
+
+def _load_asset_card_markdown(config: Config, card_id: str) -> str | None:
+    safe_id = card_id.strip()
+    if not safe_id:
+        return None
+    candidate = (config.asset_card_dir / f"{safe_id}.md").resolve()
+    try:
+        candidate.relative_to(config.asset_card_dir)
+    except ValueError:
+        return None
+    if not candidate.exists() or not candidate.is_file():
+        return None
+    return candidate.read_text(encoding="utf-8")
+
+
+def _toggle_tag(current_tags: list[str], target_tag: str) -> list[str]:
+    normalized_target = target_tag.strip()
+    if not normalized_target:
+        return current_tags
+    
+    # We use case-insensitive matching for toggling but preserve original if possible?
+    # Actually, let's just keep it simple.
+    tags = [t.strip() for t in current_tags if t.strip()]
+    if normalized_target in tags:
+        return [t for t in tags if t != normalized_target]
+    
+    # Check case-insensitively
+    lower_tags = [t.lower() for t in tags]
+    if normalized_target.lower() in lower_tags:
+        return [t for t in tags if t.lower() != normalized_target.lower()]
+    
+    return tags + [normalized_target]
 
 
 def _render_search_page(config: Config, query: str, tags: list[str], result: dict[str, Any] | None = None) -> str:
@@ -42,86 +75,110 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
     result_items = ""
     meta_summary = ""
     pagination = ""
+    
+    min_score = result["min_score"] if result is not None else config.min_score
+    
     if result is not None:
         meta_summary = (
             f"<div class='meta'>约 {result['total_results']} 条结果 · 第 {result['page']} 页，共 {result['total_pages']} 页</div>"
         )
-        tag_links = "".join(
-            f"<a class='tag' href='/search?q={html.escape(query)}&tag={html.escape(item['tag'])}'>{html.escape(item['tag'])} <span>{item['count']}</span></a>"
-            for item in result.get("available_tags", [])
-        )
+        
+        tag_items = []
+        for item in result.get("available_tags", []):
+            tag_name = item["tag"]
+            is_active = any(t.lower() == tag_name.lower() for t in tags)
+            new_tags = _toggle_tag(tags, tag_name)
+            url = _build_page_url(query, new_tags, 1, min_score)
+            cls = "tag active" if is_active else "tag"
+            tag_items.append(
+                f"<a class='{cls}' href='{html.escape(url)}'>{html.escape(tag_name)} <span>{item['count']}</span></a>"
+            )
+        tag_links = "".join(tag_items)
+        
         rendered_results: list[str] = []
         for item in result.get("results", []):
-            chips = "".join(
-                f"<span class='chip'>{html.escape(tag)}</span>"
-                for tag in item.get("tags", [])
-            )
-            title_html = html.escape(item["title"])
+            item_tags = item.get("tags", [])
+            chip_links = [f"<a class='chip' href='{html.escape(_build_page_url(query, _toggle_tag(tags, t), 1, min_score))}'>{html.escape(t)}</a>" for t in item_tags]
+            chips_html = "".join(chip_links)
+            
             md_url = str(item.get("md_url") or "").strip()
-            if md_url:
-                title_html = (
-                    f"<a href='{html.escape(md_url)}' target='_blank' rel='noopener noreferrer'>"
-                    f"{title_html}</a>"
-                )
+            card_url = str(item.get("card_url") or "").strip()
             is_asset_card = item.get("doc_kind") == "asset_card"
+            
             if is_asset_card:
-                info_bits = []
-                if item.get("category_path"):
-                    info_bits.append(f"分类 {html.escape(item['category_path'])}")
-                if item.get("priority"):
-                    info_bits.append(f"优先级 {html.escape(item['priority'])}")
-                if item.get("created_at"):
-                    info_bits.append(f"创建于 {html.escape(item['created_at'])}")
-                info_line = " · ".join(info_bits)
-                asset_details = []
+                title_html = f"<div class='title'><a href='{html.escape(md_url or '#')}' target='_blank' class='source-link' title='查看笔记原文'>{html.escape(item['title'])}</a></div>"
+                
+                if card_url:
+                    action_btn = (
+                        f"<a href='{html.escape(card_url)}' class='btn-pill-action' target='_blank'>"
+                        f"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='display:inline-block; vertical-align:middle; margin-right:4px;'><path d='M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z'/><path d='M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'/></svg>"
+                        f"<span>查看 AI 分析</span>"
+                        f"</a>"
+                    )
+                else:
+                    action_btn = ""
+                
+                details_list = []
                 if item.get("core_view"):
-                    asset_details.append(
-                        f"<div class='asset-line'><span class='asset-key'>核心观点</span><span class='asset-value'>{html.escape(item['core_view'])}</span></div>"
-                    )
+                    details_list.append(f"<div class='asset-line'><span class='asset-key'>核心观点</span><span class='asset-value'>{html.escape(item['core_view'])}</span></div>")
                 if item.get("intent"):
-                    asset_details.append(
-                        f"<div class='asset-line'><span class='asset-key'>意图识别</span><span class='asset-value'>{html.escape(item['intent'])}</span></div>"
-                    )
+                    details_list.append(f"<div class='asset-line'><span class='asset-key'>意图识别</span><span class='asset-value'>{html.escape(item['intent'])}</span></div>")
                 if item.get("cognitive_asset"):
-                    asset_details.append(
-                        f"<div class='asset-line'><span class='asset-key'>认知资产</span><span class='asset-value'>{html.escape(item['cognitive_asset'])}</span></div>"
-                    )
-                rendered_results.append(
-                    "<div class='result asset-result'>"
-                    f"<div class='title'><span class='card-badge'>资产卡</span>{title_html}</div>"
-                    f"<div class='asset-meta'>{info_line}</div>"
-                    f"<div class='path'>{html.escape(item['path_in_snapshot'])}</div>"
-                    f"<div class='asset-details'>{''.join(asset_details)}</div>"
-                    f"<div class='snippet asset-snippet'><span class='asset-key'>原始摘录</span><span class='asset-value'>{html.escape(item['snippet'])}</span></div>"
-                    f"<div class='attrs'>score={item['rerank_score']:.4f} · table={html.escape(item.get('source_table') or '')}</div>"
-                    f"<div class='chips'>{chips}</div>"
-                    "</div>"
-                )
+                    details_list.append(f"<div class='asset-line'><span class='asset-key'>认知资产</span><span class='asset-value'>{html.escape(item['cognitive_asset'])}</span></div>")
+                
+                body_content = f"<div class='asset-details'>{''.join(details_list)}</div>"
+                badge = "<span class='badge asset'>资产卡</span>"
+                card_cls = "card asset-card"
             else:
-                rendered_results.append(
-                    "<div class='result'>"
-                    f"<div class='title'>{title_html}</div>"
-                    f"<div class='path'>{html.escape(item['path_in_snapshot'])}</div>"
-                    f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
-                    f"<div class='attrs'>score={item['rerank_score']:.4f} · created_at={html.escape(item['created_at'] or '')} · table={html.escape(item.get('source_table') or '')}</div>"
-                    f"<div class='chips'>{chips}</div>"
-                    "</div>"
-                )
+                # Raw document without AI analysis. Title -> md_url. 
+                title_html = f"<div class='title'><a href='{html.escape(md_url or '#')}' target='_blank'>{html.escape(item['title'])}</a></div>"
+                action_btn = ""
+                body_content = f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
+                badge = "<span class='badge raw'>原始文档</span>"
+                card_cls = "card"
+
+            info_line = " · ".join(filter(None, [item.get("category_path"), item.get("created_at")]))
+
+            rendered_results.append(
+                f"<div class='{card_cls}'>"
+                f"  <div class='card-header'>{badge}{title_html}{action_btn}</div>"
+                f"  <div class='card-body'>"
+                f"    {body_content}"
+                f"    <div class='chips'>{chips_html}</div>"
+                f"  </div>"
+                f"  <div class='card-footer'><span>推荐度 {item['rerank_score']:.3f}</span><span>{info_line}</span><span class='path-assist'>{html.escape(item['path_in_snapshot'])}</span></div>"
+                f"</div>"
+            )
+        
         result_items = "".join(rendered_results)
         if result["total_pages"] > 1:
             current = int(result["page"])
             total_pages = int(result["total_pages"])
             links: list[str] = []
             if current > 1:
-                links.append(f"<a class='page' href='{_build_page_url(query, tags, current - 1, float(result['min_score']))}'>上一页</a>")
-            for page_number in range(1, total_pages + 1):
-                cls = "page current" if page_number == current else "page"
-                links.append(
-                    f"<a class='{cls}' href='{_build_page_url(query, tags, page_number, float(result['min_score']))}'>{page_number}</a>"
-                )
+                prev_url = _build_page_url(query, tags, current - 1, min_score)
+                links.append(f"<a class='page' href='{html.escape(prev_url)}'>上一页</a>")
+            
+            start_page = max(1, current - 2)
+            end_page = min(total_pages, current + 2)
+            
+            if start_page > 1:
+                links.append(f"<a class='page' href='{html.escape(_build_page_url(query, tags, 1, min_score))}'>1</a>")
+                if start_page > 2: links.append("<span class='gap'>...</span>")
+            
+            for p in range(start_page, end_page + 1):
+                cls = "page current" if p == current else "page"
+                links.append(f"<a class='{cls}' href='{html.escape(_build_page_url(query, tags, p, min_score))}'>{p}</a>")
+            
+            if end_page < total_pages:
+                if end_page < total_pages - 1: links.append("<span class='gap'>...</span>")
+                links.append(f"<a class='page' href='{html.escape(_build_page_url(query, tags, total_pages, min_score))}'>{total_pages}</a>")
+                
             if current < total_pages:
-                links.append(f"<a class='page' href='{_build_page_url(query, tags, current + 1, float(result['min_score']))}'>下一页</a>")
+                next_url = _build_page_url(query, tags, current + 1, min_score)
+                links.append(f"<a class='page' href='{html.escape(next_url)}'>下一页</a>")
             pagination = f"<div class='pagination'>{''.join(links)}</div>"
+
     return f"""<!doctype html>
 <html lang="zh">
 <head>
@@ -129,49 +186,127 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>moreway search</title>
   <style>
-    body {{ font-family: Georgia, 'Noto Serif SC', serif; margin: 0; background: #f7f6f2; color: #191919; }}
-    .shell {{ max-width: 980px; margin: 0 auto; padding: 36px 24px 80px; }}
-    .brand {{ font-size: 38px; margin: 32px 0 28px; letter-spacing: -0.04em; }}
-    .searchbar {{ display: grid; grid-template-columns: 1fr 220px 120px; gap: 12px; }}
-    input {{ font: inherit; padding: 14px 16px; border: 1px solid #cfc8bb; border-radius: 999px; background: #fffdf9; }}
-    button {{ font: inherit; padding: 14px 18px; border: 0; border-radius: 999px; background: #171717; color: white; cursor: pointer; }}
-    .meta {{ margin: 18px 0; color: #5f5a51; }}
-    .tagrail {{ display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 24px; }}
-    .tag {{ text-decoration: none; color: #2a2a2a; background: #ece5d8; padding: 7px 12px; border-radius: 999px; }}
-    .tag span {{ color: #7b756b; }}
-    .result {{ padding: 18px 0; border-top: 1px solid #ddd5c6; }}
-    .asset-result {{ background: #fffdfa; border: 1px solid #e6dccb; border-radius: 18px; padding: 18px 18px 16px; margin: 14px 0; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }}
-    .title {{ font-size: 22px; margin-bottom: 6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }}
-    .card-badge {{ font-size: 12px; background:#171717; color:#fff; padding:3px 8px; border-radius:999px; letter-spacing:0.02em; }}
-    .asset-meta {{ color: #5f5a51; font-size: 13px; margin-bottom: 8px; }}
-    .path {{ color: #6b665e; font-size: 13px; margin-bottom: 8px; }}
-    .snippet {{ line-height: 1.55; }}
-    .asset-snippet {{ margin-top: 10px; display: grid; gap: 6px; }}
-    .asset-details {{ display: grid; gap: 8px; margin: 12px 0 10px; }}
-    .asset-line {{ display: grid; gap: 4px; }}
-    .asset-key {{ font-size: 12px; color: #7b756b; letter-spacing: 0.02em; }}
-    .asset-value {{ line-height: 1.55; }}
-    .attrs {{ margin-top: 8px; color: #6b665e; font-size: 13px; }}
-    .chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }}
-    .chip {{ background: #f0ece3; color: #534f48; padding: 4px 8px; border-radius: 999px; font-size: 12px; }}
-    .pagination {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 24px 0; }}
-    .page {{ text-decoration: none; color: #2a2a2a; background: #ece5d8; padding: 8px 12px; border-radius: 999px; }}
-    .page.current {{ background: #171717; color: white; }}
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+    :root {{
+      --primary: #009688;
+      --primary-dark: #00796b;
+      --accent: #ffc107;
+      --bg: #eeeeee;
+      --surface: #ffffff;
+      --text-main: #212121;
+      --text-muted: #757575;
+      --divider: #bdbdbd;
+      --shadow: 0 2px 2px 0 rgba(0,0,0,0.14), 0 3px 1px -2px rgba(0,0,0,0.2), 0 1px 5px 0 rgba(0,0,0,0.12);
+      --shadow-hover: 0 8px 17px 0 rgba(0,0,0,0.2), 0 6px 20px 0 rgba(0,0,0,0.19);
+    }}
+    body {{ font-family: 'Roboto', -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--text-main); line-height: 1.6; }}
+    
+    .app-bar {{ background: var(--primary); color: white; padding: 16px 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); position: sticky; top: 0; z-index: 100; }}
+    .app-bar .brand {{ font-size: 24px; font-weight: 500; text-decoration: none; color: inherit; letter-spacing: 0.5px; }}
+    
+    .container {{ max-width: 840px; margin: 0 auto; padding: 24px 16px 100px; }}
+    
+    .search-panel {{ background: var(--surface); padding: 24px; border-radius: 4px; box-shadow: var(--shadow); margin-bottom: 24px; }}
+    .search-row {{ display: flex; flex-wrap: wrap; gap: 16px; }}
+    .input-field {{ flex: 1; min-width: 200px; position: relative; }}
+    .input-field input {{ width: 100%; border: none; border-bottom: 2px solid var(--divider); padding: 8px 0; font-size: 16px; outline: none; background: transparent; transition: border-color 0.3s; }}
+    .input-field input:focus {{ border-bottom-color: var(--primary); }}
+    .input-field label {{ font-size: 12px; color: var(--text-muted); display: block; }}
+    
+    .btn {{ background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 2px; text-transform: uppercase; font-weight: 500; cursor: pointer; box-shadow: 0 2px 2px rgba(0,0,0,0.2); transition: 0.3s; }}
+    .btn:hover {{ background: var(--primary-dark); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }}
+    .btn.secondary {{ background: transparent; color: var(--text-muted); box-shadow: none; }}
+    .btn.secondary:hover {{ background: rgba(0,0,0,0.05); }}
+
+    .meta {{ font-size: 14px; color: var(--text-muted); margin-bottom: 16px; padding: 0 8px; }}
+    
+    .tagrail {{ display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }}
+    .tag {{ text-decoration: none; color: var(--text-main); background: #e0e0e0; padding: 6px 16px; border-radius: 16px; font-size: 13px; transition: 0.2s; }}
+    .tag:hover {{ background: #d5d5d5; }}
+    .tag.active {{ background: var(--primary); color: white; }}
+    .tag span {{ margin-left: 4px; opacity: 0.7; }}
+    
+    /* Result Card Styles */
+    .card {{ background: var(--surface); border-radius: 4px; box-shadow: var(--shadow); margin-bottom: 24px; transition: 0.3s; overflow: hidden; position: relative; }}
+    .card:hover {{ box-shadow: var(--shadow-hover); }}
+    .card.asset-card {{ border-left: 4px solid var(--accent); }}
+    
+    .card-header {{ padding: 16px 20px; display: flex; align-items: flex-start; gap: 12px; }}
+    .card-header .title {{ flex: 1; font-size: 18px; font-weight: 500; }}
+    .card-header .title a {{ color: inherit; text-decoration: none; }}
+    .card-header .title a:hover {{ color: var(--primary); }}
+    
+    .badge {{ font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 2px; letter-spacing: 0.5px; }}
+    .badge.asset {{ background: #fff8e1; color: #ffa000; border: 1px solid #ffecb3; }}
+    .badge.raw {{ background: #f5f5f5; color: #757575; }}
+    
+    .btn-pill-action {{ display: flex; align-items: center; gap: 8px; background: #f5f5f5; padding: 6px 12px; border-radius: 20px; text-decoration: none; color: var(--text-muted); font-size: 13px; font-weight: 500; transition: 0.2s; border: 1px solid #e0e0e0; flex-shrink: 0; }}
+    .btn-pill-action:hover {{ background: var(--primary); color: white; border-color: var(--primary); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+    .btn-pill-action svg {{ width: 16px; height: 16px; fill: currentColor; }}
+    
+    .card-body {{ padding: 0 20px 16px; }}
+    .source-link {{ color: inherit; text-decoration: none; border-bottom: 1px solid transparent; transition: 0.3s; }}
+    .source-link:hover {{ border-bottom-color: var(--primary); color: var(--primary); }}
+    
+    .asset-details {{ background: #fafafa; border-radius: 4px; padding: 12px; margin-bottom: 16px; border: 1px solid #f0f0f0; }}
+    .asset-line {{ margin-bottom: 8px; }}
+    .asset-key {{ font-size: 11px; color: var(--primary); font-weight: 700; text-transform: uppercase; display: block; margin-bottom: 2px; }}
+    .asset-value {{ font-size: 14px; color: #424242; }}
+    
+    .snippet {{ font-size: 14px; line-height: 1.6; color: #424242; }}
+    .snippet-label {{ font-size: 11px; font-weight: 700; color: #9e9e9e; text-transform: uppercase; margin-right: 8px; border: 1px solid #e0e0e0; padding: 1px 4px; border-radius: 2px; }}
+    
+    .chips {{ display: flex; gap: 6px; flex-wrap: wrap; margin-top: 16px; }}
+    .chip {{ background: #f5f5f5; color: var(--text-muted); padding: 2px 10px; border-radius: 12px; font-size: 12px; text-decoration: none; transition: 0.2s; border: 1px solid #e0e0e0; }}
+    .chip:hover {{ background: var(--primary); color: white; border-color: var(--primary); }}
+    
+    .card-footer {{ padding: 12px 20px; border-top: 1px solid #f0f0f0; display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); background: #fafafa; gap: 12px; }}
+    .path-assist {{ font-style: italic; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }}
+    
+    .pagination {{ display: flex; justify-content: center; gap: 4px; margin: 40px 0; }}
+    .page {{ text-decoration: none; color: var(--text-main); min-width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: 0.2s; }}
+    .page:hover {{ background: rgba(0,0,0,0.05); }}
+    .page.current {{ background: var(--primary); color: white; font-weight: 500; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }}
+    .gap {{ align-self: center; padding: 0 8px; color: var(--text-muted); }}
+
+    @media (max-width: 600px) {{
+      .search-row {{ flex-direction: column; }}
+      .card-header {{ flex-wrap: wrap; }}
+      .btn-fab-mini {{ order: -1; margin-left: auto; }}
+    }}
   </style>
 </head>
 <body>
-  <div class="shell">
-    <div class="brand">moreway</div>
-    <form class="searchbar" method="get" action="/search">
-      <input type="text" name="q" value="{escaped_query}" placeholder="搜索你的长期笔记资产">
-      <input type="text" name="tag" value="{escaped_tags}" placeholder="标签过滤，逗号分隔">
-      <input type="hidden" name="min_score" value="{result['min_score'] if result is not None else config.min_score}">
-      <button type="submit">搜索</button>
-    </form>
+  <div class="app-bar">
+    <a href="/" class="brand">moreway</a>
+  </div>
+  
+  <div class="container">
+    <div class="search-panel">
+      <form method="get" action="/search">
+        <div class="search-row">
+          <div class="input-field">
+            <label>搜索关键词</label>
+            <input type="text" name="q" value="{escaped_query}" placeholder="搜索你的资产..." autofocus>
+          </div>
+          <div class="input-field">
+            <label>标签过滤</label>
+            <input type="text" name="tag" value="{escaped_tags}" placeholder="例如: AI, 笔记">
+          </div>
+        </div>
+        <input type="hidden" name="min_score" value="{min_score}">
+        <div style="margin-top: 20px; display: flex; gap: 12px;">
+          <button type="submit" class="btn">立即搜索</button>
+          <button type="button" class="btn secondary" onclick="window.location.href='/'">清空重置</button>
+        </div>
+      </form>
+    </div>
+    
     {meta_summary}
     <div class="tagrail">{tag_links}</div>
-    {pagination}
+    
     <div class="results">{result_items}</div>
+    
     {pagination}
   </div>
 </body>
@@ -185,6 +320,15 @@ class AppHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/healthz":
             self._write_json(HTTPStatus.OK, {"ok": True, "service": "moreway-search-service"})
+            return
+        if parsed.path == "/asset-card":
+            params = parse_qs(parsed.query, keep_blank_values=False)
+            card_id = (params.get("id") or [""])[0].strip()
+            markdown = _load_asset_card_markdown(self.config, card_id)
+            if markdown is None:
+                self._write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "asset_card_not_found"})
+                return
+            self._write_markdown(HTTPStatus.OK, markdown)
             return
         if parsed.path == "/":
             self._write_html(HTTPStatus.OK, _render_search_page(self.config, "", []))
@@ -270,6 +414,14 @@ class AppHandler(BaseHTTPRequestHandler):
         body = html_text.encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "text/html; charset=utf-8")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _write_markdown(self, status: HTTPStatus, markdown_text: str) -> None:
+        body = markdown_text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("content-type", "text/markdown; charset=utf-8")
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

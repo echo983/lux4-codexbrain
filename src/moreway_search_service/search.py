@@ -40,6 +40,7 @@ class SearchHit:
     core_view: str
     intent: str
     cognitive_asset: str
+    raw_metadata: dict[str, Any]
 
 
 def _prefer_hit(left: SearchHit, right: SearchHit) -> SearchHit:
@@ -284,23 +285,53 @@ def search_keep_cards(
                     core_view=core_view,
                     intent=intent,
                     cognitive_asset=cognitive_asset,
+                    raw_metadata=metadata,
                 )
             )
 
-    deduped_hits: list[SearchHit] = []
-    by_keep_md_fid: dict[str, SearchHit] = {}
+    # Merge logic to combine (Raw Note MD) and (Asset Card MD)
+    # Prefer a stable source key:
+    # 1. keep_md_fid
+    # 2. path_in_snapshot
+    # 3. note_title + created_at fallback
+    by_note_key: dict[str, SearchHit] = {}
+    
     for hit in reranked_hits:
-        keep_md_fid = hit.keep_md_fid.strip()
-        if keep_md_fid:
-            existing = by_keep_md_fid.get(keep_md_fid)
-            if existing is None:
-                by_keep_md_fid[keep_md_fid] = hit
+        base_title = hit.note_title if hit.note_title else hit.path_in_snapshot.replace(".json", "").replace(".md", "")
+        key = (
+            hit.keep_md_fid.strip()
+            or hit.path_in_snapshot.strip()
+            or f"{base_title.strip().lower()}::{hit.created_at}"
+        )
+        
+        existing = by_note_key.get(key)
+        if existing is None:
+            # If it's a raw note, we initialize it
+            # If it's an asset card, we'll try to find its raw later
+            by_note_key[key] = hit
+        else:
+            # Merging
+            if hit.doc_kind == "asset_card" and existing.doc_kind != "asset_card":
+                # hit is the card (Analysis), existing is the raw (Source)
+                # We want title -> existing's FID, button -> hit's FID
+                new_hit = SearchHit(
+                    **{**hit.__dict__, 
+                       "raw_metadata": {**hit.raw_metadata, "source_md_fid": existing.keep_md_fid}}
+                )
+                by_note_key[key] = new_hit
+            elif hit.doc_kind != "asset_card" and existing.doc_kind == "asset_card":
+                # hit is the raw (Source), existing is the card (Analysis)
+                # Keep card's analysis fields but update source_md_fid
+                new_hit = SearchHit(
+                    **{**existing.__dict__, 
+                       "raw_metadata": {**existing.raw_metadata, "source_md_fid": hit.keep_md_fid}}
+                )
+                by_note_key[key] = new_hit
             else:
-                by_keep_md_fid[keep_md_fid] = _prefer_hit(existing, hit)
-            continue
-        deduped_hits.append(hit)
-    deduped_hits.extend(by_keep_md_fid.values())
-    deduped_hits.sort(key=lambda hit: hit.rerank_score if hit.rerank_score is not None else float("-inf"), reverse=True)
+                # Same kind, keep the one with better score
+                by_note_key[key] = _prefer_hit(existing, hit)
+
+    deduped_hits = sorted(by_note_key.values(), key=lambda h: h.rerank_score or 0, reverse=True)
 
     total_results = len(deduped_hits)
     current_page = max(1, page)
@@ -343,6 +374,7 @@ def search_keep_cards(
                 "priority": hit.priority,
                 "keep_md_fid": hit.keep_md_fid,
                 "md_url": nbss_object_url(hit.keep_md_fid, server_endpoint=server_endpoint) if hit.keep_md_fid else "",
+                "card_url": f"/asset-card?id={hit.id}" if hit.doc_kind == "asset_card" and hit.id else "",
                 "keep_json_fid": hit.keep_json_fid,
                 "core_view": hit.core_view,
                 "intent": hit.intent,

@@ -262,75 +262,78 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["cognitive_asset"], "一条认知资产")
 
     def test_search_page_renders_asset_card_summary(self) -> None:
-        config = Config(
-            host="127.0.0.1",
-            port=0,
-            tables=["cards", "raw"],
-            vector_limit=10,
-            per_page=20,
-            min_score=0.1,
-        )
-        server = build_server(config)
-        try:
-            with mock.patch("moreway_search_service.http.search_keep_cards") as search_mock:
-                search_mock.return_value = {
-                    "query": "alpha",
-                    "tables": ["cards", "raw"],
-                    "vector_limit": 10,
-                    "per_page": 20,
-                    "page": 1,
-                    "total_pages": 1,
-                    "total_results": 1,
-                    "min_score": 0.1,
-                    "required_tags": [],
-                    "vector_hit_count": 1,
-                    "filtered_hit_count": 1,
-                    "available_tags": [],
-                    "results": [
-                        {
-                            "id": "asset-1",
-                            "title": "Alpha",
-                            "note_title": "Alpha",
-                            "path_in_snapshot": "Alpha.json",
-                            "snippet": "原始摘录",
-                            "rerank_score": 0.9,
-                            "distance": 0.1,
-                            "source_table": "cards",
-                            "doc_kind": "asset_card",
-                            "source_type": "google_keep",
-                            "card_schema": "deep_asset_card_v1",
-                            "created_at": "2026-01-01",
-                            "tags": ["china"],
-                            "category_path": "notes/google-keep",
-                            "priority": "medium",
-                            "keep_md_fid": "NBSS:0xDDD",
-                            "md_url": "http://localhost:8080/nbss/0xDDD",
-                            "keep_json_fid": "NBSS:0xAAA",
-                            "core_view": "一条核心观点",
-                            "intent": "一条意图识别",
-                            "cognitive_asset": "一条认知资产",
-                        }
-                    ],
-                }
-                import threading
-                import urllib.request
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Config(
+                host="127.0.0.1",
+                port=0,
+                tables=["cards", "raw"],
+                vector_limit=10,
+                per_page=20,
+                min_score=0.1,
+                asset_card_dir=Path(tmpdir),
+            )
+            server = build_server(config)
+            try:
+                with mock.patch("moreway_search_service.http.search_keep_cards") as search_mock:
+                    search_mock.return_value = {
+                        "query": "alpha",
+                        "tables": ["cards", "raw"],
+                        "vector_limit": 10,
+                        "per_page": 20,
+                        "page": 1,
+                        "total_pages": 1,
+                        "total_results": 1,
+                        "min_score": 0.1,
+                        "required_tags": [],
+                        "vector_hit_count": 1,
+                        "filtered_hit_count": 1,
+                        "available_tags": [],
+                        "results": [
+                            {
+                                "id": "asset-1",
+                                "title": "Alpha",
+                                "note_title": "Alpha",
+                                "path_in_snapshot": "Alpha.json",
+                                "snippet": "原始摘录",
+                                "rerank_score": 0.9,
+                                "distance": 0.1,
+                                "source_table": "cards",
+                                "doc_kind": "asset_card",
+                                "source_type": "google_keep",
+                                "card_schema": "deep_asset_card_v1",
+                                "created_at": "2026-01-01",
+                                "tags": ["china"],
+                                "category_path": "notes/google-keep",
+                                "priority": "medium",
+                                "keep_md_fid": "NBSS:0xDDD",
+                                "md_url": "http://localhost:8080/nbss/0xDDD",
+                                "card_url": "/asset-card?id=asset-1",
+                                "keep_json_fid": "NBSS:0xAAA",
+                                "core_view": "一条核心观点",
+                                "intent": "一条意图识别",
+                                "cognitive_asset": "一条认知资产",
+                            }
+                        ],
+                    }
+                    import threading
+                    import urllib.request
 
-                thread = threading.Thread(target=server.serve_forever, daemon=True)
-                thread.start()
-                with urllib.request.urlopen(
-                    f"http://{server.server_address[0]}:{server.server_address[1]}/search?q=alpha"
-                ) as response:
-                    body = response.read().decode("utf-8")
-            self.assertIn("资产卡", body)
-            self.assertIn("核心观点", body)
-            self.assertIn("意图识别", body)
-            self.assertIn("认知资产", body)
-        finally:
-            server.shutdown()
-            server.server_close()
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    with urllib.request.urlopen(
+                        f"http://{server.server_address[0]}:{server.server_address[1]}/search?q=alpha"
+                    ) as response:
+                        body = response.read().decode("utf-8")
+                self.assertIn("资产卡", body)
+                self.assertIn("核心观点", body)
+                self.assertIn("意图识别", body)
+                self.assertIn("认知资产", body)
+            finally:
+                server.shutdown()
+                server.server_close()
 
     def test_http_search_api_returns_json(self) -> None:
-        config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4)
+        config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4, asset_card_dir=Path("."))
         server = build_server(config)
         try:
             with mock.patch(
@@ -373,7 +376,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
             server.server_close()
 
     def test_search_page_links_title_to_md_url(self) -> None:
-        config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4)
+        config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4, asset_card_dir=Path("."))
         server = build_server(config)
         try:
             with mock.patch(
@@ -400,6 +403,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                         "tags": [],
                         "keep_md_fid": "NBSS:0xDDD",
                         "md_url": "http://localhost:8080/nbss/0xDDD",
+                        "card_url": "/asset-card?id=1",
                         "keep_json_fid": "",
                         "note_title": "Alpha",
                         "id": "1",
@@ -423,7 +427,38 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 with urllib.request.urlopen(f"http://{host}:{port}/search?q=china", timeout=5) as response:
                     body = response.read().decode("utf-8")
                 self.assertIn("http://localhost:8080/nbss/0xDDD", body)
+                self.assertIn("/asset-card?id=1", body)
                 self.assertIn(">Alpha</a>", body)
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_asset_card_route_serves_card_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            asset_dir = Path(tmpdir)
+            (asset_dir / "keep_demo.md").write_text("# Demo Card\n\nhello", encoding="utf-8")
+            config = Config(
+                host="127.0.0.1",
+                port=0,
+                tables=["cards"],
+                vector_limit=20,
+                per_page=20,
+                min_score=0.4,
+                asset_card_dir=asset_dir,
+            )
+            server = build_server(config)
+            try:
+                import threading
+                import urllib.request
+
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                host, port = server.server_address
+                with urllib.request.urlopen(f"http://{host}:{port}/asset-card?id=keep_demo", timeout=5) as response:
+                    body = response.read().decode("utf-8")
+                    content_type = response.headers.get("content-type")
+                self.assertEqual(content_type, "text/markdown; charset=utf-8")
+                self.assertIn("# Demo Card", body)
+            finally:
+                server.shutdown()
+                server.server_close()

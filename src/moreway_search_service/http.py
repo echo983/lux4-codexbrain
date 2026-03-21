@@ -25,16 +25,28 @@ def _parse_tag_values(values: list[str]) -> list[str]:
     return tags
 
 
+def _build_page_url(query: str, tags: list[str], page: int, min_score: float) -> str:
+    tag_param = ",".join(tags)
+    return (
+        f"/search?q={html.escape(query)}"
+        f"&tag={html.escape(tag_param)}"
+        f"&page={page}"
+        f"&min_score={min_score:g}"
+    )
+
+
 def _render_search_page(config: Config, query: str, tags: list[str], result: dict[str, Any] | None = None) -> str:
     escaped_query = html.escape(query)
     escaped_tags = html.escape(", ".join(tags))
     tag_links = ""
     result_items = ""
     meta_summary = ""
+    pagination = ""
     if result is not None:
         meta_summary = (
             f"<div class='meta'>检索到 {result['filtered_hit_count']} 条候选，"
-            f"返回 {len(result['results'])} 条结果。</div>"
+            f"分数阈值过滤后共 {result['total_results']} 条。"
+            f"当前第 {result['page']} / {result['total_pages']} 页，每页 {result['per_page']} 条。</div>"
         )
         tag_links = "".join(
             f"<a class='tag' href='/search?q={html.escape(query)}&tag={html.escape(item['tag'])}'>{html.escape(item['tag'])} <span>{item['count']}</span></a>"
@@ -63,6 +75,20 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
                 "</div>"
             )
         result_items = "".join(rendered_results)
+        if result["total_pages"] > 1:
+            current = int(result["page"])
+            total_pages = int(result["total_pages"])
+            links: list[str] = []
+            if current > 1:
+                links.append(f"<a class='page' href='{_build_page_url(query, tags, current - 1, float(result['min_score']))}'>上一页</a>")
+            for page_number in range(1, total_pages + 1):
+                cls = "page current" if page_number == current else "page"
+                links.append(
+                    f"<a class='{cls}' href='{_build_page_url(query, tags, page_number, float(result['min_score']))}'>{page_number}</a>"
+                )
+            if current < total_pages:
+                links.append(f"<a class='page' href='{_build_page_url(query, tags, current + 1, float(result['min_score']))}'>下一页</a>")
+            pagination = f"<div class='pagination'>{''.join(links)}</div>"
     return f"""<!doctype html>
 <html lang="zh">
 <head>
@@ -87,6 +113,9 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
     .attrs {{ margin-top: 8px; color: #6b665e; font-size: 13px; }}
     .chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }}
     .chip {{ background: #f0ece3; color: #534f48; padding: 4px 8px; border-radius: 999px; font-size: 12px; }}
+    .pagination {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 24px 0; }}
+    .page {{ text-decoration: none; color: #2a2a2a; background: #ece5d8; padding: 8px 12px; border-radius: 999px; }}
+    .page.current {{ background: #171717; color: white; }}
   </style>
 </head>
 <body>
@@ -95,11 +124,14 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
     <form class="searchbar" method="get" action="/search">
       <input type="text" name="q" value="{escaped_query}" placeholder="搜索你的长期笔记资产">
       <input type="text" name="tag" value="{escaped_tags}" placeholder="标签过滤，逗号分隔">
+      <input type="hidden" name="min_score" value="{result['min_score'] if result is not None else config.min_score}">
       <button type="submit">搜索</button>
     </form>
     {meta_summary}
     <div class="tagrail">{tag_links}</div>
+    {pagination}
     <div class="results">{result_items}</div>
+    {pagination}
   </div>
 </body>
 </html>"""
@@ -120,13 +152,17 @@ class AppHandler(BaseHTTPRequestHandler):
             params = parse_qs(parsed.query, keep_blank_values=False)
             query = (params.get("q") or [""])[0].strip()
             tags = _parse_tag_values(params.get("tag") or [])
+            page = max(1, int((params.get("page") or ["1"])[0]))
+            min_score = float((params.get("min_score") or [str(self.config.min_score)])[0])
             result = None
             if query:
                 result = search_keep_cards(
                     query,
                     table=self.config.table,
                     vector_limit=self.config.vector_limit,
-                    result_limit=self.config.result_limit,
+                    per_page=self.config.per_page,
+                    page=page,
+                    min_score=min_score,
                     required_tags=tags,
                 )
             self._write_html(HTTPStatus.OK, _render_search_page(self.config, query, tags, result))
@@ -149,12 +185,16 @@ class AppHandler(BaseHTTPRequestHandler):
         tags_raw = payload.get("tags") or []
         tags = [str(item).strip() for item in tags_raw if str(item).strip()] if isinstance(tags_raw, list) else []
         vector_limit = int(payload.get("vector_limit") or self.config.vector_limit)
-        result_limit = int(payload.get("limit") or self.config.result_limit)
+        per_page = int(payload.get("limit") or payload.get("per_page") or self.config.per_page)
+        page = max(1, int(payload.get("page") or 1))
+        min_score = float(payload.get("min_score") or self.config.min_score)
         result = search_keep_cards(
             query,
             table=self.config.table,
             vector_limit=vector_limit,
-            result_limit=result_limit,
+            per_page=per_page,
+            page=page,
+            min_score=min_score,
             required_tags=tags,
         )
         self._write_json(HTTPStatus.OK, result)

@@ -58,7 +58,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                     "test",
                                     table="t",
                                     vector_limit=10,
-                                    result_limit=5,
+                                    per_page=5,
                                     required_tags=["china"],
                                 )
         self.assertEqual(result["filtered_hit_count"], 1)
@@ -100,13 +100,65 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                         "test",
                                         table="t",
                                         vector_limit=10,
-                                        result_limit=5,
+                                        per_page=5,
                                         required_tags=[],
                                     )
         self.assertEqual(result["results"][0]["md_url"], "http://localhost:8080/nbss/0xDDD")
 
+    def test_search_paginates_after_threshold_filter(self) -> None:
+        with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
+            with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
+                with mock.patch("moreway_search_service.search.resolve_nbss_server_endpoint", return_value="http://localhost:8080"):
+                    with mock.patch("moreway_search_service.search.get_embeddings", return_value=[[0.1, 0.2]]):
+                        with mock.patch(
+                            "moreway_search_service.search.post_json",
+                            return_value={
+                                "results": [
+                                    {
+                                        "id": str(i),
+                                        "text": f"---\\nsource_type: google_keep\\ntags: []\\nretrieval_terms: []\\ncategory_path: \\\"notes/google-keep\\\"\\ncreated_at: 2026-01-01\\npriority: \\\"medium\\\"\\n---\\n\\n# Alpha {i}\\n\\nhello",
+                                        "metadata": {
+                                            "note_title": f"Alpha {i}",
+                                            "path_in_snapshot": f"Alpha{i}.json",
+                                            "keep_json_fid": f"NBSS:0x{i}AA",
+                                            "keep_md_fid": f"NBSS:0x{i}DD",
+                                        },
+                                        "_distance": 0.1 + i,
+                                    }
+                                    for i in range(4)
+                                ]
+                            },
+                        ):
+                            with mock.patch(
+                                "moreway_search_service.search.fetch_source_text",
+                                return_value=json.dumps({"labels": []}),
+                            ):
+                                with mock.patch(
+                                    "moreway_search_service.search.rerank",
+                                    return_value=[
+                                        {"id": 0, "score": 0.95},
+                                        {"id": 1, "score": 0.80},
+                                        {"id": 2, "score": 0.39},
+                                        {"id": 3, "score": 0.10},
+                                    ],
+                                ):
+                                    result = search_keep_cards(
+                                        "test",
+                                        table="t",
+                                        vector_limit=10,
+                                        per_page=1,
+                                        page=2,
+                                        min_score=0.4,
+                                        required_tags=[],
+                                    )
+        self.assertEqual(result["total_results"], 2)
+        self.assertEqual(result["total_pages"], 2)
+        self.assertEqual(result["page"], 2)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["title"], "Alpha 1")
+
     def test_http_search_api_returns_json(self) -> None:
-        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, result_limit=5)
+        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, per_page=20, min_score=0.4)
         server = build_server(config)
         try:
             with mock.patch(
@@ -115,11 +167,15 @@ class MorewaySearchServiceTests(unittest.TestCase):
                     "query": "china",
                     "table": "cards",
                     "vector_limit": 20,
-                    "result_limit": 5,
+                    "per_page": 20,
+                    "page": 1,
+                    "total_pages": 1,
+                    "total_results": 1,
+                    "min_score": 0.4,
                     "required_tags": ["geo"],
                     "vector_hit_count": 2,
                     "filtered_hit_count": 1,
-                    "results": [{"title": "Alpha", "path_in_snapshot": "Alpha.json", "snippet": "x", "rerank_score": 0.9, "created_at": "", "priority": "", "tags": [], "keep_md_fid": "", "keep_json_fid": "", "note_title": "Alpha", "id": "1", "distance": 0.1, "source_type": "google_keep", "category_path": ""}],
+                    "results": [{"title": "Alpha", "path_in_snapshot": "Alpha.json", "snippet": "x", "rerank_score": 0.9, "created_at": "", "priority": "", "tags": [], "keep_md_fid": "", "keep_json_fid": "", "note_title": "Alpha", "id": "1", "distance": 0.1, "doc_kind": "asset_card", "source_type": "google_keep", "card_schema": "deep_asset_card_v1", "category_path": ""}],
                     "available_tags": [],
                     "models": {"embedding": "e", "reranker": "r"},
                 },
@@ -145,7 +201,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
             server.server_close()
 
     def test_search_page_links_title_to_md_url(self) -> None:
-        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, result_limit=5)
+        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, per_page=20, min_score=0.4)
         server = build_server(config)
         try:
             with mock.patch(
@@ -154,7 +210,11 @@ class MorewaySearchServiceTests(unittest.TestCase):
                     "query": "china",
                     "table": "cards",
                     "vector_limit": 20,
-                    "result_limit": 5,
+                    "per_page": 20,
+                    "page": 1,
+                    "total_pages": 1,
+                    "total_results": 1,
+                    "min_score": 0.4,
                     "required_tags": [],
                     "vector_hit_count": 2,
                     "filtered_hit_count": 1,
@@ -172,7 +232,9 @@ class MorewaySearchServiceTests(unittest.TestCase):
                         "note_title": "Alpha",
                         "id": "1",
                         "distance": 0.1,
+                        "doc_kind": "asset_card",
                         "source_type": "google_keep",
+                        "card_schema": "deep_asset_card_v1",
                         "category_path": "",
                     }],
                     "available_tags": [],

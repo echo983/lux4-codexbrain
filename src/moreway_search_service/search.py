@@ -26,7 +26,9 @@ class SearchHit:
     snippet: str
     rerank_score: float | None
     distance: float | None
+    doc_kind: str
     source_type: str
+    card_schema: str
     created_at: str
     tags: list[str]
     category_path: str
@@ -130,7 +132,9 @@ def search_keep_cards(
     *,
     table: str,
     vector_limit: int,
-    result_limit: int,
+    per_page: int,
+    page: int = 1,
+    min_score: float = 0.4,
     required_tags: list[str] | None = None,
 ) -> dict[str, Any]:
     server_endpoint = resolve_nbss_server_endpoint()
@@ -182,11 +186,14 @@ def search_keep_cards(
             account_id=rerank_account_id,
             token=rerank_token,
             model=rerank_model,
-            top_k=result_limit,
+            top_k=None,
         )
         for score_item in reranked_scores:
             idx = score_item.get("id")
             if not isinstance(idx, int) or idx < 0 or idx >= len(filtered_candidates):
+                continue
+            score = float(score_item.get("score", 0.0))
+            if score < min_score:
                 continue
             candidate = filtered_candidates[idx]
             metadata = candidate["metadata"]
@@ -199,23 +206,39 @@ def search_keep_cards(
                     note_title=str(metadata.get("note_title") or ""),
                     path_in_snapshot=str(metadata.get("path_in_snapshot") or ""),
                     snippet=_build_snippet(text),
-                    rerank_score=float(score_item.get("score", 0.0)),
+                    rerank_score=score,
                     distance=float(candidate["raw"].get("_distance", 0.0)) if candidate["raw"].get("_distance") is not None else None,
+                    doc_kind=str(metadata.get("doc_kind") or frontmatter.get("doc_kind") or ""),
                     source_type=str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
+                    card_schema=str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
                     created_at=str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
                     tags=candidate["tags"],
-                    category_path=str(frontmatter.get("category_path") or ""),
-                    priority=str(frontmatter.get("priority") or ""),
+                    category_path=str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
+                    priority=str(metadata.get("priority") or frontmatter.get("priority") or ""),
                     keep_md_fid=str(metadata.get("keep_md_fid") or ""),
                     keep_json_fid=str(metadata.get("keep_json_fid") or ""),
                 )
             )
 
+    total_results = len(reranked_hits)
+    current_page = max(1, page)
+    page_size = max(1, per_page)
+    total_pages = max(1, (total_results + page_size - 1) // page_size) if total_results else 1
+    if current_page > total_pages:
+        current_page = total_pages
+    start = (current_page - 1) * page_size
+    end = start + page_size
+    paged_hits = reranked_hits[start:end]
+
     return {
         "query": query,
         "table": table,
         "vector_limit": vector_limit,
-        "result_limit": result_limit,
+        "per_page": page_size,
+        "page": current_page,
+        "total_pages": total_pages,
+        "total_results": total_results,
+        "min_score": min_score,
         "required_tags": required_tags or [],
         "vector_hit_count": len(raw_results),
         "filtered_hit_count": len(filtered_candidates),
@@ -228,7 +251,9 @@ def search_keep_cards(
                 "snippet": hit.snippet,
                 "rerank_score": hit.rerank_score,
                 "distance": hit.distance,
+                "doc_kind": hit.doc_kind,
                 "source_type": hit.source_type,
+                "card_schema": hit.card_schema,
                 "created_at": hit.created_at,
                 "tags": hit.tags,
                 "category_path": hit.category_path,
@@ -237,7 +262,7 @@ def search_keep_cards(
                 "md_url": nbss_object_url(hit.keep_md_fid, server_endpoint=server_endpoint) if hit.keep_md_fid else "",
                 "keep_json_fid": hit.keep_json_fid,
             }
-            for hit in reranked_hits
+            for hit in paged_hits
         ],
         "available_tags": [
             {"tag": tag, "count": count}

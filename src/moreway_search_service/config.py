@@ -9,7 +9,8 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 18561
 DEFAULT_TABLE = "google_keep_asset_cards_directmd_eval200"
 DEFAULT_VECTOR_LIMIT = 50
-DEFAULT_RESULT_LIMIT = 10
+DEFAULT_PER_PAGE = 20
+DEFAULT_MIN_SCORE = 0.4
 
 
 def _load_dotenv_file(path: Path) -> dict[str, str]:
@@ -41,7 +42,8 @@ class Config:
     port: int
     table: str
     vector_limit: int
-    result_limit: int
+    per_page: int
+    min_score: float
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -66,11 +68,18 @@ class Config:
             except ValueError:
                 return default
 
+        def read_float(key: str, default: float) -> float:
+            raw = read_value(key, str(default))
+            try:
+                return float(raw)
+            except ValueError:
+                return default
+
         return cls(
             host=read_value("MOREWAY_HOST", DEFAULT_HOST) or DEFAULT_HOST,
             port=read_int("MOREWAY_PORT", DEFAULT_PORT),
             table=read_value("MOREWAY_SEARCH_TABLE", DEFAULT_TABLE) or DEFAULT_TABLE,
             vector_limit=read_int("MOREWAY_VECTOR_LIMIT", DEFAULT_VECTOR_LIMIT),
-            result_limit=read_int("MOREWAY_RESULT_LIMIT", DEFAULT_RESULT_LIMIT),
+            per_page=read_int("MOREWAY_PER_PAGE", DEFAULT_PER_PAGE),
+            min_score=read_float("MOREWAY_MIN_SCORE", DEFAULT_MIN_SCORE),
         )
-

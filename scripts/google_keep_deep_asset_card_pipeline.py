@@ -34,6 +34,9 @@ DEFAULT_EMBED_WORKERS = 32
 DEFAULT_PREPARE_WORKERS = 16
 MAX_CARD_CHARS = 28000
 MAX_SOURCE_CHARS = 10000
+ASSET_DOC_KIND = "asset_card"
+ASSET_CARD_SCHEMA = "deep_asset_card_v1"
+GOOGLE_KEEP_SOURCE_TYPE = "google_keep"
 
 
 @dataclass
@@ -426,7 +429,9 @@ def build_card_frontmatter(note: KeepNoteSource) -> str:
     lines = [
         "---",
         f"id: {note.card_id}",
-        "source_type: google_keep",
+        f"doc_kind: {ASSET_DOC_KIND}",
+        f"source_type: {GOOGLE_KEEP_SOURCE_TYPE}",
+        f"card_schema: {ASSET_CARD_SCHEMA}",
         "tags: []",
         "retrieval_terms: []",
         'category_path: "notes/google-keep"',
@@ -482,12 +487,14 @@ def generate_single_card(note: KeepNoteSource) -> dict[str, Any]:
         raise RuntimeError(f"Failed to generate card body for {note.path}: {last_error}")
     markdown = build_card_frontmatter(note) + "\n\n" + truncate_card_body(body)
     return {
-        "id": note.card_id,
-        "note_title": note.note_title,
-        "path": note.path,
-        "card_markdown": markdown,
-        "metadata": {
-            "source_type": "google_keep",
+            "id": note.card_id,
+            "note_title": note.note_title,
+            "path": note.path,
+            "card_markdown": markdown,
+            "metadata": {
+            "doc_kind": ASSET_DOC_KIND,
+            "source_type": GOOGLE_KEEP_SOURCE_TYPE,
+            "card_schema": ASSET_CARD_SCHEMA,
             "source_snapshot_fid": note.snapshot_fid,
             "keep_json_fid": format_nbss_ref(note.json_fid),
             "keep_md_fid": format_nbss_ref(note.markdown_fid),

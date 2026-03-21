@@ -9,7 +9,6 @@ from typing import Any
 from scripts.cloudflare_bge_m3_embed import get_embeddings, resolve_config as resolve_embedding_config
 from scripts.cloudflare_bge_reranker_base import rerank, resolve_config as resolve_reranker_config
 from scripts.build_notfinder_snapshot_static_site import nbss_object_url, resolve_nbss_server_endpoint
-from scripts.google_keep_json_to_md import fetch_source_text
 from scripts.lancedb_local_api import post_json, resolve_lancedb_url
 
 
@@ -40,7 +39,6 @@ class SearchHit:
     core_view: str
     intent: str
     cognitive_asset: str
-    raw_metadata: dict[str, Any]
 
 
 def _prefer_hit(left: SearchHit, right: SearchHit) -> SearchHit:
@@ -122,35 +120,18 @@ def _extract_card_fields(text: str) -> tuple[str, str, str]:
     return core_view, intent, cognitive_asset
 
 
-def _fetch_keep_labels(keep_json_fid: str, cache: dict[str, list[str]]) -> list[str]:
-    if not keep_json_fid:
-        return []
-    if keep_json_fid in cache:
-        return cache[keep_json_fid]
-    try:
-        raw = json.loads(fetch_source_text(keep_json_fid))
-    except Exception:
-        cache[keep_json_fid] = []
-        return []
-    labels = [
-        str(item.get("name", "")).strip()
-        for item in (raw.get("labels") or [])
-        if isinstance(item, dict) and str(item.get("name", "")).strip()
-    ]
-    cache[keep_json_fid] = labels
-    return labels
-
-
 def _normalize_tags(tag_values: list[str]) -> set[str]:
     return {tag.strip().casefold() for tag in tag_values if tag.strip()}
 
 
-def _coerce_tags(frontmatter: dict[str, Any], labels: list[str]) -> list[str]:
-    front_tags = frontmatter.get("tags")
+def _coerce_tags(frontmatter: dict[str, Any], metadata: dict[str, Any]) -> list[str]:
     tag_values: list[str] = []
+    front_tags = frontmatter.get("tags")
     if isinstance(front_tags, list):
         tag_values.extend(str(item).strip() for item in front_tags if str(item).strip())
-    tag_values.extend(labels)
+    metadata_tags = metadata.get("tags")
+    if isinstance(metadata_tags, list):
+        tag_values.extend(str(item).strip() for item in metadata_tags if str(item).strip())
     deduped: list[str] = []
     seen: set[str] = set()
     for item in tag_values:
@@ -202,7 +183,6 @@ def search_keep_cards(
             copied = dict(item)
             copied["_source_table"] = table
             raw_results.append(copied)
-    label_cache: dict[str, list[str]] = {}
     required = _normalize_tags(required_tags or [])
     tag_counts: Counter[str] = Counter()
 
@@ -214,8 +194,7 @@ def search_keep_cards(
         metadata = dict(item.get("metadata") or {})
         frontmatter = _parse_frontmatter(text)
         doc_kind = _normalize_doc_kind(raw_id, metadata, frontmatter)
-        labels = _fetch_keep_labels(str(metadata.get("keep_json_fid") or ""), label_cache)
-        tags = _coerce_tags(frontmatter, labels)
+        tags = _coerce_tags(frontmatter, metadata)
         for tag in tags:
             tag_counts[tag] += 1
         normalized = _normalize_tags(tags)
@@ -285,7 +264,6 @@ def search_keep_cards(
                     core_view=core_view,
                     intent=intent,
                     cognitive_asset=cognitive_asset,
-                    raw_metadata=metadata,
                 )
             )
 
@@ -306,30 +284,9 @@ def search_keep_cards(
         
         existing = by_note_key.get(key)
         if existing is None:
-            # If it's a raw note, we initialize it
-            # If it's an asset card, we'll try to find its raw later
             by_note_key[key] = hit
         else:
-            # Merging
-            if hit.doc_kind == "asset_card" and existing.doc_kind != "asset_card":
-                # hit is the card (Analysis), existing is the raw (Source)
-                # We want title -> existing's FID, button -> hit's FID
-                new_hit = SearchHit(
-                    **{**hit.__dict__, 
-                       "raw_metadata": {**hit.raw_metadata, "source_md_fid": existing.keep_md_fid}}
-                )
-                by_note_key[key] = new_hit
-            elif hit.doc_kind != "asset_card" and existing.doc_kind == "asset_card":
-                # hit is the raw (Source), existing is the card (Analysis)
-                # Keep card's analysis fields but update source_md_fid
-                new_hit = SearchHit(
-                    **{**existing.__dict__, 
-                       "raw_metadata": {**existing.raw_metadata, "source_md_fid": hit.keep_md_fid}}
-                )
-                by_note_key[key] = new_hit
-            else:
-                # Same kind, keep the one with better score
-                by_note_key[key] = _prefer_hit(existing, hit)
+            by_note_key[key] = _prefer_hit(existing, hit)
 
     deduped_hits = sorted(by_note_key.values(), key=lambda h: h.rerank_score or 0, reverse=True)
 

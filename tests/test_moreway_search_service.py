@@ -27,6 +27,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                         "note_title": "Alpha",
                                         "path_in_snapshot": "Alpha.json",
                                         "keep_json_fid": "NBSS:0xAAA",
+                                        "tags": ["china"],
                                     },
                                     "_distance": 0.1,
                                 },
@@ -37,6 +38,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                         "note_title": "Beta",
                                         "path_in_snapshot": "Beta.json",
                                         "keep_json_fid": "NBSS:0xBBB",
+                                        "tags": ["spain"],
                                     },
                                     "_distance": 0.2,
                                 },
@@ -44,23 +46,16 @@ class MorewaySearchServiceTests(unittest.TestCase):
                         },
                     ):
                         with mock.patch(
-                            "moreway_search_service.search.fetch_source_text",
-                            side_effect=[
-                                json.dumps({"labels": [{"name": "china"}]}),
-                                json.dumps({"labels": [{"name": "spain"}]}),
-                            ],
+                            "moreway_search_service.search.rerank",
+                            return_value=[{"id": 0, "score": 0.9}],
                         ):
-                            with mock.patch(
-                                "moreway_search_service.search.rerank",
-                                return_value=[{"id": 0, "score": 0.9}],
-                            ):
-                                    result = search_keep_cards(
-                                        "test",
-                                        tables=["t"],
-                                        vector_limit=10,
-                                        per_page=5,
-                                        required_tags=["china"],
-                                )
+                                result = search_keep_cards(
+                                    "test",
+                                    tables=["t"],
+                                    vector_limit=10,
+                                    per_page=5,
+                                    required_tags=["china"],
+                            )
         self.assertEqual(result["filtered_hit_count"], 1)
         self.assertEqual(result["results"][0]["title"], "Alpha")
         self.assertEqual(result["results"][0]["tags"], ["china"])
@@ -89,20 +84,16 @@ class MorewaySearchServiceTests(unittest.TestCase):
                             },
                         ):
                             with mock.patch(
-                                "moreway_search_service.search.fetch_source_text",
-                                return_value=json.dumps({"labels": []}),
+                                "moreway_search_service.search.rerank",
+                                return_value=[{"id": 0, "score": 0.9}],
                             ):
-                                with mock.patch(
-                                    "moreway_search_service.search.rerank",
-                                    return_value=[{"id": 0, "score": 0.9}],
-                                ):
-                                    result = search_keep_cards(
-                                        "test",
-                                        tables=["t"],
-                                        vector_limit=10,
-                                        per_page=5,
-                                        required_tags=[],
-                                    )
+                                result = search_keep_cards(
+                                    "test",
+                                    tables=["t"],
+                                    vector_limit=10,
+                                    per_page=5,
+                                    required_tags=[],
+                                )
         self.assertEqual(result["results"][0]["md_url"], "http://localhost:8080/nbss/0xDDD")
 
     def test_search_paginates_after_threshold_filter(self) -> None:
@@ -130,27 +121,23 @@ class MorewaySearchServiceTests(unittest.TestCase):
                             },
                         ):
                             with mock.patch(
-                                "moreway_search_service.search.fetch_source_text",
-                                return_value=json.dumps({"labels": []}),
+                                "moreway_search_service.search.rerank",
+                                return_value=[
+                                    {"id": 0, "score": 0.95},
+                                    {"id": 1, "score": 0.80},
+                                    {"id": 2, "score": 0.39},
+                                    {"id": 3, "score": 0.10},
+                                ],
                             ):
-                                with mock.patch(
-                                    "moreway_search_service.search.rerank",
-                                    return_value=[
-                                        {"id": 0, "score": 0.95},
-                                        {"id": 1, "score": 0.80},
-                                        {"id": 2, "score": 0.39},
-                                        {"id": 3, "score": 0.10},
-                                    ],
-                                ):
-                                    result = search_keep_cards(
-                                        "test",
-                                        tables=["t"],
-                                        vector_limit=10,
-                                        per_page=1,
-                                        page=2,
-                                        min_score=0.4,
-                                        required_tags=[],
-                                    )
+                                result = search_keep_cards(
+                                    "test",
+                                    tables=["t"],
+                                    vector_limit=10,
+                                    per_page=1,
+                                    page=2,
+                                    min_score=0.4,
+                                    required_tags=[],
+                                )
         self.assertEqual(result["total_results"], 2)
         self.assertEqual(result["total_pages"], 2)
         self.assertEqual(result["page"], 2)
@@ -181,21 +168,17 @@ class MorewaySearchServiceTests(unittest.TestCase):
                             return_value={"results": [duplicate, duplicate]},
                         ):
                             with mock.patch(
-                                "moreway_search_service.search.fetch_source_text",
-                                return_value=json.dumps({"labels": []}),
+                                "moreway_search_service.search.rerank",
+                                return_value=[{"id": 0, "score": 0.95}],
                             ):
-                                with mock.patch(
-                                    "moreway_search_service.search.rerank",
-                                    return_value=[{"id": 0, "score": 0.95}],
-                                ):
-                                    result = search_keep_cards(
-                                        "test",
-                                        tables=["t"],
-                                        vector_limit=10,
-                                        per_page=10,
-                                        required_tags=[],
-                                        min_score=0.0,
-                                    )
+                                result = search_keep_cards(
+                                    "test",
+                                    tables=["t"],
+                                    vector_limit=10,
+                                    per_page=10,
+                                    required_tags=[],
+                                    min_score=0.0,
+                                )
         self.assertEqual(result["filtered_hit_count"], 1)
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["id"], "dup-1")
@@ -239,21 +222,17 @@ class MorewaySearchServiceTests(unittest.TestCase):
                             side_effect=[{"results": [asset]}, {"results": [raw]}],
                         ):
                             with mock.patch(
-                                "moreway_search_service.search.fetch_source_text",
-                                return_value=json.dumps({"labels": []}),
+                                "moreway_search_service.search.rerank",
+                                return_value=[{"id": 0, "score": 0.95}, {"id": 1, "score": 0.80}],
                             ):
-                                with mock.patch(
-                                    "moreway_search_service.search.rerank",
-                                    return_value=[{"id": 0, "score": 0.95}, {"id": 1, "score": 0.80}],
-                                ):
-                                    result = search_keep_cards(
-                                        "test",
-                                        tables=["cards", "raw"],
-                                        vector_limit=10,
-                                        per_page=10,
-                                        required_tags=[],
-                                        min_score=0.0,
-                                    )
+                                result = search_keep_cards(
+                                    "test",
+                                    tables=["cards", "raw"],
+                                    vector_limit=10,
+                                    per_page=10,
+                                    required_tags=[],
+                                    min_score=0.0,
+                                )
         self.assertEqual(result["filtered_hit_count"], 2)
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["doc_kind"], "asset_card")

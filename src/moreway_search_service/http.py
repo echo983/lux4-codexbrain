@@ -68,6 +68,102 @@ def _toggle_tag(current_tags: list[str], target_tag: str) -> list[str]:
     return tags + [normalized_target]
 
 
+def _render_tag_links(query: str, tags: list[str], available_tags: list[dict[str, Any]], min_score: float) -> str:
+    tag_items = []
+    for item in available_tags:
+        tag_name = item["tag"]
+        is_active = any(t.lower() == tag_name.lower() for t in tags)
+        new_tags = _toggle_tag(tags, tag_name)
+        url = _build_page_url(query, new_tags, 1, min_score)
+        cls = "tag active" if is_active else "tag"
+        tag_items.append(
+            f"<a class='{cls}' href='{html.escape(url)}'>{html.escape(tag_name)} <span>{item['count']}</span></a>"
+        )
+    return "".join(tag_items)
+
+
+def _render_chip_links(query: str, tags: list[str], item_tags: list[str], min_score: float) -> str:
+    return "".join(
+        f"<a class='chip' href='{html.escape(_build_page_url(query, _toggle_tag(tags, t), 1, min_score))}'>{html.escape(t)}</a>"
+        for t in item_tags
+    )
+
+
+def _render_asset_card_result(item: dict[str, Any], chips_html: str) -> str:
+    md_url = str(item.get("md_url") or "").strip()
+    card_url = str(item.get("card_url") or "").strip()
+    title_html = (
+        f"<div class='title'><a href='{html.escape(md_url or '#')}' target='_blank' class='source-link' title='查看笔记原文'>"
+        f"{html.escape(item['title'])}</a></div>"
+    )
+    action_btn = ""
+    if card_url:
+        action_btn = (
+            f"<a href='{html.escape(card_url)}' class='btn-pill-action' target='_blank'>"
+            f"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='display:inline-block; vertical-align:middle; margin-right:4px;'><path d='M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z'/><path d='M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'/></svg>"
+            f"<span>查看 AI 分析</span>"
+            f"</a>"
+        )
+    details_list = []
+    if item.get("core_view"):
+        details_list.append(f"<div class='asset-line'><span class='asset-key'>核心观点</span><span class='asset-value'>{html.escape(item['core_view'])}</span></div>")
+    if item.get("intent"):
+        details_list.append(f"<div class='asset-line'><span class='asset-key'>意图识别</span><span class='asset-value'>{html.escape(item['intent'])}</span></div>")
+    if item.get("cognitive_asset"):
+        details_list.append(f"<div class='asset-line'><span class='asset-key'>认知资产</span><span class='asset-value'>{html.escape(item['cognitive_asset'])}</span></div>")
+    info_line = " · ".join(filter(None, [item.get("category_path"), item.get("created_at")]))
+    return (
+        "<div class='card asset-card'>"
+        f"  <div class='card-header'><span class='badge asset'>资产卡</span>{title_html}{action_btn}</div>"
+        f"  <div class='card-body'><div class='asset-details'>{''.join(details_list)}</div><div class='chips'>{chips_html}</div></div>"
+        f"  <div class='card-footer'><span>推荐度 {item['rerank_score']:.3f}</span><span>{info_line}</span><span class='path-assist'>{html.escape(item['path_in_snapshot'])}</span></div>"
+        "</div>"
+    )
+
+
+def _render_raw_text_result(item: dict[str, Any], chips_html: str) -> str:
+    md_url = str(item.get("md_url") or "").strip()
+    info_line = " · ".join(filter(None, [item.get("category_path"), item.get("created_at")]))
+    title_html = f"<div class='title'><a href='{html.escape(md_url or '#')}' target='_blank'>{html.escape(item['title'])}</a></div>"
+    return (
+        "<div class='card'>"
+        f"  <div class='card-header'><span class='badge raw'>原始文档</span>{title_html}</div>"
+        f"  <div class='card-body'><div class='snippet'>{html.escape(item['snippet'])}</div><div class='chips'>{chips_html}</div></div>"
+        f"  <div class='card-footer'><span>推荐度 {item['rerank_score']:.3f}</span><span>{info_line}</span><span class='path-assist'>{html.escape(item['path_in_snapshot'])}</span></div>"
+        "</div>"
+    )
+
+
+def _render_pagination(query: str, tags: list[str], page: int, total_pages: int, min_score: float) -> str:
+    if total_pages <= 1:
+        return ""
+    links: list[str] = []
+    if page > 1:
+        prev_url = _build_page_url(query, tags, page - 1, min_score)
+        links.append(f"<a class='page' href='{html.escape(prev_url)}'>上一页</a>")
+
+    start_page = max(1, page - 2)
+    end_page = min(total_pages, page + 2)
+    if start_page > 1:
+        links.append(f"<a class='page' href='{html.escape(_build_page_url(query, tags, 1, min_score))}'>1</a>")
+        if start_page > 2:
+            links.append("<span class='gap'>...</span>")
+
+    for p in range(start_page, end_page + 1):
+        cls = "page current" if p == page else "page"
+        links.append(f"<a class='{cls}' href='{html.escape(_build_page_url(query, tags, p, min_score))}'>{p}</a>")
+
+    if end_page < total_pages:
+        if end_page < total_pages - 1:
+            links.append("<span class='gap'>...</span>")
+        links.append(f"<a class='page' href='{html.escape(_build_page_url(query, tags, total_pages, min_score))}'>{total_pages}</a>")
+
+    if page < total_pages:
+        next_url = _build_page_url(query, tags, page + 1, min_score)
+        links.append(f"<a class='page' href='{html.escape(next_url)}'>下一页</a>")
+    return f"<div class='pagination'>{''.join(links)}</div>"
+
+
 def _render_search_page(config: Config, query: str, tags: list[str], result: dict[str, Any] | None = None) -> str:
     escaped_query = html.escape(query)
     escaped_tags = html.escape(", ".join(tags))
@@ -83,101 +179,18 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
             f"<div class='meta'>约 {result['total_results']} 条结果 · 第 {result['page']} 页，共 {result['total_pages']} 页</div>"
         )
         
-        tag_items = []
-        for item in result.get("available_tags", []):
-            tag_name = item["tag"]
-            is_active = any(t.lower() == tag_name.lower() for t in tags)
-            new_tags = _toggle_tag(tags, tag_name)
-            url = _build_page_url(query, new_tags, 1, min_score)
-            cls = "tag active" if is_active else "tag"
-            tag_items.append(
-                f"<a class='{cls}' href='{html.escape(url)}'>{html.escape(tag_name)} <span>{item['count']}</span></a>"
-            )
-        tag_links = "".join(tag_items)
+        tag_links = _render_tag_links(query, tags, result.get("available_tags", []), min_score)
         
         rendered_results: list[str] = []
         for item in result.get("results", []):
-            item_tags = item.get("tags", [])
-            chip_links = [f"<a class='chip' href='{html.escape(_build_page_url(query, _toggle_tag(tags, t), 1, min_score))}'>{html.escape(t)}</a>" for t in item_tags]
-            chips_html = "".join(chip_links)
-            
-            md_url = str(item.get("md_url") or "").strip()
-            card_url = str(item.get("card_url") or "").strip()
-            is_asset_card = item.get("doc_kind") == "asset_card"
-            
-            if is_asset_card:
-                title_html = f"<div class='title'><a href='{html.escape(md_url or '#')}' target='_blank' class='source-link' title='查看笔记原文'>{html.escape(item['title'])}</a></div>"
-                
-                if card_url:
-                    action_btn = (
-                        f"<a href='{html.escape(card_url)}' class='btn-pill-action' target='_blank'>"
-                        f"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='display:inline-block; vertical-align:middle; margin-right:4px;'><path d='M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z'/><path d='M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'/></svg>"
-                        f"<span>查看 AI 分析</span>"
-                        f"</a>"
-                    )
-                else:
-                    action_btn = ""
-                
-                details_list = []
-                if item.get("core_view"):
-                    details_list.append(f"<div class='asset-line'><span class='asset-key'>核心观点</span><span class='asset-value'>{html.escape(item['core_view'])}</span></div>")
-                if item.get("intent"):
-                    details_list.append(f"<div class='asset-line'><span class='asset-key'>意图识别</span><span class='asset-value'>{html.escape(item['intent'])}</span></div>")
-                if item.get("cognitive_asset"):
-                    details_list.append(f"<div class='asset-line'><span class='asset-key'>认知资产</span><span class='asset-value'>{html.escape(item['cognitive_asset'])}</span></div>")
-                
-                body_content = f"<div class='asset-details'>{''.join(details_list)}</div>"
-                badge = "<span class='badge asset'>资产卡</span>"
-                card_cls = "card asset-card"
+            chips_html = _render_chip_links(query, tags, item.get("tags", []), min_score)
+            if item.get("doc_kind") == "asset_card":
+                rendered_results.append(_render_asset_card_result(item, chips_html))
             else:
-                # Raw document without AI analysis. Title -> md_url. 
-                title_html = f"<div class='title'><a href='{html.escape(md_url or '#')}' target='_blank'>{html.escape(item['title'])}</a></div>"
-                action_btn = ""
-                body_content = f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
-                badge = "<span class='badge raw'>原始文档</span>"
-                card_cls = "card"
-
-            info_line = " · ".join(filter(None, [item.get("category_path"), item.get("created_at")]))
-
-            rendered_results.append(
-                f"<div class='{card_cls}'>"
-                f"  <div class='card-header'>{badge}{title_html}{action_btn}</div>"
-                f"  <div class='card-body'>"
-                f"    {body_content}"
-                f"    <div class='chips'>{chips_html}</div>"
-                f"  </div>"
-                f"  <div class='card-footer'><span>推荐度 {item['rerank_score']:.3f}</span><span>{info_line}</span><span class='path-assist'>{html.escape(item['path_in_snapshot'])}</span></div>"
-                f"</div>"
-            )
+                rendered_results.append(_render_raw_text_result(item, chips_html))
         
         result_items = "".join(rendered_results)
-        if result["total_pages"] > 1:
-            current = int(result["page"])
-            total_pages = int(result["total_pages"])
-            links: list[str] = []
-            if current > 1:
-                prev_url = _build_page_url(query, tags, current - 1, min_score)
-                links.append(f"<a class='page' href='{html.escape(prev_url)}'>上一页</a>")
-            
-            start_page = max(1, current - 2)
-            end_page = min(total_pages, current + 2)
-            
-            if start_page > 1:
-                links.append(f"<a class='page' href='{html.escape(_build_page_url(query, tags, 1, min_score))}'>1</a>")
-                if start_page > 2: links.append("<span class='gap'>...</span>")
-            
-            for p in range(start_page, end_page + 1):
-                cls = "page current" if p == current else "page"
-                links.append(f"<a class='{cls}' href='{html.escape(_build_page_url(query, tags, p, min_score))}'>{p}</a>")
-            
-            if end_page < total_pages:
-                if end_page < total_pages - 1: links.append("<span class='gap'>...</span>")
-                links.append(f"<a class='page' href='{html.escape(_build_page_url(query, tags, total_pages, min_score))}'>{total_pages}</a>")
-                
-            if current < total_pages:
-                next_url = _build_page_url(query, tags, current + 1, min_score)
-                links.append(f"<a class='page' href='{html.escape(next_url)}'>下一页</a>")
-            pagination = f"<div class='pagination'>{''.join(links)}</div>"
+        pagination = _render_pagination(query, tags, int(result["page"]), int(result["total_pages"]), min_score)
 
     return f"""<!doctype html>
 <html lang="zh">

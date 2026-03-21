@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 
 from .models import ConversationSession, IncomingMessage, ReplyMessage
 from .publisher import ReplyPublisher
 from .session_store import SessionStore
 
 LOGGER = logging.getLogger(__name__)
+OUTBOX_POLL_INTERVAL_SECONDS = 0.2
 
 
 class EchoService:
@@ -61,7 +63,19 @@ class DaemonService:
 
             try:
                 session = self._store.get_or_create_session(item)
-                response = self._responder.build_reply(item, session)
+                publish_stop = threading.Event()
+                publish_thread = threading.Thread(
+                    target=self._outbox_publish_loop,
+                    args=(item.session_key, publish_stop),
+                    name=f"lux4-outbox-{item.message_id}",
+                    daemon=True,
+                )
+                publish_thread.start()
+                try:
+                    response = self._responder.build_reply(item, session)
+                finally:
+                    publish_stop.set()
+                    publish_thread.join(timeout=1)
                 if isinstance(response, ReplyMessage):
                     reply = response
                     codex_session_id = None
@@ -79,6 +93,11 @@ class DaemonService:
                 LOGGER.exception("failed to process incoming message", extra={"message_id": item.message_id})
             finally:
                 self._queue.task_done()
+
+    def _outbox_publish_loop(self, session_key: str, stop_event: threading.Event) -> None:
+        while not stop_event.is_set():
+            self._publish_pending_outbox(session_key)
+            stop_event.wait(OUTBOX_POLL_INTERVAL_SECONDS)
 
     def _publish_pending_outbox(self, session_key: str) -> None:
         for outbox_message in self._store.get_pending_outbox_messages(session_key):

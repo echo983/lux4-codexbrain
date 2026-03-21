@@ -4,6 +4,8 @@ from io import BytesIO
 import json
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -319,7 +321,7 @@ class CodexExecClientTest(unittest.TestCase):
         self.assertEqual(arguments["sandbox"], "workspace-write")
         self.assertEqual(arguments["cwd"], str(Path.cwd()))
         self.assertIn("lux4-send-message", arguments["developer-instructions"])
-        self.assertIn("Both intermediate updates and final answers", arguments["developer-instructions"])
+        self.assertIn("所有面向用户的消息，包括中间更新和最终答案，都必须通过 `lux4-send-message` 发送。", arguments["developer-instructions"])
         self.assertEqual(env["CODEX_API_KEY"], "api-key")
         self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
         self.assertEqual(env["NEO4J_USERNAME"], "neo4j-user")
@@ -616,6 +618,64 @@ class DaemonOutboxFlowTest(unittest.TestCase):
 
             self.assertEqual([m.text for m in publisher.messages], ["agent proactive message", "final reply"])
             self.assertEqual(store.get_pending_outbox_messages(message.session_key), [])
+            service.stop()
+
+    def test_service_publishes_new_outbox_message_while_turn_is_still_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            publisher = CapturingPublisher()
+            final_release = threading.Event()
+            proactive_published = threading.Event()
+            message = _build_incoming_message()
+
+            class ObservingPublisher(CapturingPublisher):
+                def publish(self, outgoing: ReplyMessage) -> None:
+                    super().publish(outgoing)
+                    if outgoing.text == "agent proactive message":
+                        proactive_published.set()
+
+            publisher = ObservingPublisher()
+
+            def slow_build_reply(incoming, session):
+                self.assertFalse(proactive_published.is_set())
+                queued = store.enqueue_outbox_message(
+                    session_key=session.session_key,
+                    source=incoming.source,
+                    site_url=incoming.site_url,
+                    room_id=incoming.room_id,
+                    sender_user_id=incoming.sender_user_id,
+                    sender_username=incoming.sender_username,
+                    trigger_message_id=incoming.message_id,
+                    text="agent proactive message",
+                )
+                self.assertIsNotNone(queued.outbox_id)
+                self.assertTrue(proactive_published.wait(timeout=2))
+                final_release.wait(timeout=2)
+                return mock.Mock(
+                    reply=ReplyMessage(
+                        version=1,
+                        kind="reply_message",
+                        source="rocketchat",
+                        siteUrl="https://rocket.example.com",
+                        roomId="room-1",
+                        replyMode="message",
+                        text="final reply",
+                    ),
+                    codex_session_id="thread-123",
+                )
+
+            responder = mock.Mock()
+            responder.build_reply.side_effect = slow_build_reply
+            service = DaemonService(store=store, publisher=publisher, responder=responder)
+            service.start()
+
+            service.accept(message)
+            self.assertTrue(proactive_published.wait(timeout=3))
+            self.assertEqual([m.text for m in publisher.messages], ["agent proactive message"])
+            final_release.set()
+            service._queue.join()
+
+            self.assertEqual([m.text for m in publisher.messages], ["agent proactive message", "final reply"])
             service.stop()
 
 

@@ -54,12 +54,12 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                 "moreway_search_service.search.rerank",
                                 return_value=[{"id": 0, "score": 0.9}],
                             ):
-                                result = search_keep_cards(
-                                    "test",
-                                    table="t",
-                                    vector_limit=10,
-                                    per_page=5,
-                                    required_tags=["china"],
+                                    result = search_keep_cards(
+                                        "test",
+                                        tables=["t"],
+                                        vector_limit=10,
+                                        per_page=5,
+                                        required_tags=["china"],
                                 )
         self.assertEqual(result["filtered_hit_count"], 1)
         self.assertEqual(result["results"][0]["title"], "Alpha")
@@ -98,7 +98,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                 ):
                                     result = search_keep_cards(
                                         "test",
-                                        table="t",
+                                        tables=["t"],
                                         vector_limit=10,
                                         per_page=5,
                                         required_tags=[],
@@ -144,7 +144,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                 ):
                                     result = search_keep_cards(
                                         "test",
-                                        table="t",
+                                        tables=["t"],
                                         vector_limit=10,
                                         per_page=1,
                                         page=2,
@@ -157,15 +157,116 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["title"], "Alpha 1")
 
+    def test_search_deduplicates_same_id_and_path(self) -> None:
+        duplicate = {
+            "id": "dup-1",
+            "text": "---\ndoc_kind: asset_card\nsource_type: google_keep\ncard_schema: deep_asset_card_v1\ntags: []\nretrieval_terms: []\ncategory_path: \"notes/google-keep\"\ncreated_at: 2026-01-01\npriority: \"medium\"\n---\n\n# Alpha\n\nhello",
+            "metadata": {
+                "doc_kind": "asset_card",
+                "source_type": "google_keep",
+                "card_schema": "deep_asset_card_v1",
+                "note_title": "Alpha",
+                "path_in_snapshot": "Alpha.json",
+                "keep_json_fid": "NBSS:0xAAA",
+                "keep_md_fid": "NBSS:0xDDD",
+            },
+            "_distance": 0.1,
+        }
+        with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
+            with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
+                with mock.patch("moreway_search_service.search.resolve_nbss_server_endpoint", return_value="http://localhost:8080"):
+                    with mock.patch("moreway_search_service.search.get_embeddings", return_value=[[0.1, 0.2]]):
+                        with mock.patch(
+                            "moreway_search_service.search.post_json",
+                            return_value={"results": [duplicate, duplicate]},
+                        ):
+                            with mock.patch(
+                                "moreway_search_service.search.fetch_source_text",
+                                return_value=json.dumps({"labels": []}),
+                            ):
+                                with mock.patch(
+                                    "moreway_search_service.search.rerank",
+                                    return_value=[{"id": 0, "score": 0.95}],
+                                ):
+                                    result = search_keep_cards(
+                                        "test",
+                                        tables=["t"],
+                                        vector_limit=10,
+                                        per_page=10,
+                                        required_tags=[],
+                                        min_score=0.0,
+                                    )
+        self.assertEqual(result["filtered_hit_count"], 1)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["id"], "dup-1")
+
+    def test_search_keeps_asset_card_and_raw_text_for_same_path(self) -> None:
+        asset = {
+            "id": "asset-1",
+            "text": "---\ndoc_kind: asset_card\nsource_type: google_keep\ncard_schema: deep_asset_card_v1\ntags: []\nretrieval_terms: []\ncategory_path: \"notes/google-keep\"\ncreated_at: 2026-01-01\npriority: \"medium\"\n---\n\n# Alpha\n\nhello",
+            "metadata": {
+                "doc_kind": "asset_card",
+                "source_type": "google_keep",
+                "card_schema": "deep_asset_card_v1",
+                "note_title": "Alpha",
+                "path_in_snapshot": "Alpha.json",
+                "keep_json_fid": "NBSS:0xAAA",
+                "keep_md_fid": "NBSS:0xDDD",
+            },
+            "_distance": 0.1,
+            "_source_table": "cards",
+        }
+        raw = {
+            "id": "raw-1",
+            "text": "# Alpha\n\nraw content",
+            "metadata": {
+                "doc_kind": "raw_text",
+                "source_type": "google_keep",
+                "note_title": "Alpha",
+                "path_in_snapshot": "Alpha.json",
+                "keep_json_fid": "NBSS:0xAAA",
+                "keep_md_fid": "NBSS:0xDDD",
+            },
+            "_distance": 0.2,
+            "_source_table": "raw",
+        }
+        with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
+            with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
+                with mock.patch("moreway_search_service.search.resolve_nbss_server_endpoint", return_value="http://localhost:8080"):
+                    with mock.patch("moreway_search_service.search.get_embeddings", return_value=[[0.1, 0.2]]):
+                        with mock.patch(
+                            "moreway_search_service.search.post_json",
+                            side_effect=[{"results": [asset]}, {"results": [raw]}],
+                        ):
+                            with mock.patch(
+                                "moreway_search_service.search.fetch_source_text",
+                                return_value=json.dumps({"labels": []}),
+                            ):
+                                with mock.patch(
+                                    "moreway_search_service.search.rerank",
+                                    return_value=[{"id": 0, "score": 0.95}, {"id": 1, "score": 0.80}],
+                                ):
+                                    result = search_keep_cards(
+                                        "test",
+                                        tables=["cards", "raw"],
+                                        vector_limit=10,
+                                        per_page=10,
+                                        required_tags=[],
+                                        min_score=0.0,
+                                    )
+        self.assertEqual(result["filtered_hit_count"], 2)
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual({item["doc_kind"] for item in result["results"]}, {"asset_card", "raw_text"})
+
     def test_http_search_api_returns_json(self) -> None:
-        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, per_page=20, min_score=0.4)
+        config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4)
         server = build_server(config)
         try:
             with mock.patch(
                 "moreway_search_service.http.search_keep_cards",
                 return_value={
                     "query": "china",
-                    "table": "cards",
+                    "tables": ["cards"],
                     "vector_limit": 20,
                     "per_page": 20,
                     "page": 1,
@@ -175,7 +276,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                     "required_tags": ["geo"],
                     "vector_hit_count": 2,
                     "filtered_hit_count": 1,
-                    "results": [{"title": "Alpha", "path_in_snapshot": "Alpha.json", "snippet": "x", "rerank_score": 0.9, "created_at": "", "priority": "", "tags": [], "keep_md_fid": "", "keep_json_fid": "", "note_title": "Alpha", "id": "1", "distance": 0.1, "doc_kind": "asset_card", "source_type": "google_keep", "card_schema": "deep_asset_card_v1", "category_path": ""}],
+                    "results": [{"title": "Alpha", "path_in_snapshot": "Alpha.json", "snippet": "x", "rerank_score": 0.9, "created_at": "", "priority": "", "tags": [], "keep_md_fid": "", "keep_json_fid": "", "note_title": "Alpha", "id": "1", "distance": 0.1, "source_table": "cards", "doc_kind": "asset_card", "source_type": "google_keep", "card_schema": "deep_asset_card_v1", "category_path": ""}],
                     "available_tags": [],
                     "models": {"embedding": "e", "reranker": "r"},
                 },
@@ -201,14 +302,14 @@ class MorewaySearchServiceTests(unittest.TestCase):
             server.server_close()
 
     def test_search_page_links_title_to_md_url(self) -> None:
-        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, per_page=20, min_score=0.4)
+        config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4)
         server = build_server(config)
         try:
             with mock.patch(
                 "moreway_search_service.http.search_keep_cards",
                 return_value={
                     "query": "china",
-                    "table": "cards",
+                    "tables": ["cards"],
                     "vector_limit": 20,
                     "per_page": 20,
                     "page": 1,
@@ -232,6 +333,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                         "note_title": "Alpha",
                         "id": "1",
                         "distance": 0.1,
+                        "source_table": "cards",
                         "doc_kind": "asset_card",
                         "source_type": "google_keep",
                         "card_schema": "deep_asset_card_v1",

@@ -7,7 +7,10 @@ from pathlib import Path
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 18561
-DEFAULT_TABLE = "google_keep_asset_cards_directmd_eval200"
+DEFAULT_TABLES = [
+    "google_keep_asset_cards_directmd_eval200",
+    "google_keep_raw_md",
+]
 DEFAULT_VECTOR_LIMIT = 50
 DEFAULT_PER_PAGE = 20
 DEFAULT_MIN_SCORE = 0.4
@@ -40,7 +43,7 @@ def _load_dotenv_file(path: Path) -> dict[str, str]:
 class Config:
     host: str
     port: int
-    table: str
+    tables: list[str]
     vector_limit: int
     per_page: int
     min_score: float
@@ -75,10 +78,15 @@ class Config:
             except ValueError:
                 return default
 
+        def read_list(key: str, default: list[str]) -> list[str]:
+            raw = read_value(key, ",".join(default))
+            items = [part.strip() for part in raw.split(",") if part.strip()]
+            return items or list(default)
+
         return cls(
             host=read_value("MOREWAY_HOST", DEFAULT_HOST) or DEFAULT_HOST,
             port=read_int("MOREWAY_PORT", DEFAULT_PORT),
-            table=read_value("MOREWAY_SEARCH_TABLE", DEFAULT_TABLE) or DEFAULT_TABLE,
+            tables=read_list("MOREWAY_SEARCH_TABLES", DEFAULT_TABLES),
             vector_limit=read_int("MOREWAY_VECTOR_LIMIT", DEFAULT_VECTOR_LIMIT),
             per_page=read_int("MOREWAY_PER_PAGE", DEFAULT_PER_PAGE),
             min_score=read_float("MOREWAY_MIN_SCORE", DEFAULT_MIN_SCORE),

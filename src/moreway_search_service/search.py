@@ -26,6 +26,7 @@ class SearchHit:
     snippet: str
     rerank_score: float | None
     distance: float | None
+    source_table: str
     doc_kind: str
     source_type: str
     card_schema: str
@@ -127,10 +128,21 @@ def _coerce_tags(frontmatter: dict[str, Any], labels: list[str]) -> list[str]:
     return deduped
 
 
+def _normalize_doc_kind(raw_id: str, metadata: dict[str, Any], frontmatter: dict[str, Any]) -> str:
+    explicit = str(metadata.get("doc_kind") or frontmatter.get("doc_kind") or "").strip()
+    if explicit:
+        return explicit
+    if raw_id.startswith("rawmd::"):
+        return "raw_text"
+    if raw_id.startswith("keep_"):
+        return "asset_card"
+    return ""
+
+
 def search_keep_cards(
     query: str,
     *,
-    table: str,
+    tables: list[str],
     vector_limit: int,
     per_page: int,
     page: int = 1,
@@ -142,24 +154,32 @@ def search_keep_cards(
     rerank_account_id, rerank_token, rerank_model = resolve_reranker_config()
     query_vector = get_embeddings([query], account_id=emb_account_id, token=emb_token, model=emb_model)[0]
 
-    search_response = post_json(
-        f"{resolve_lancedb_url()}/search",
-        {
-            "table": table,
-            "query_vector": query_vector,
-            "limit": vector_limit,
-        },
-    )
-    raw_results = list(search_response.get("results") or [])
+    raw_results: list[dict[str, Any]] = []
+    for table in tables:
+        search_response = post_json(
+            f"{resolve_lancedb_url()}/search",
+            {
+                "table": table,
+                "query_vector": query_vector,
+                "limit": vector_limit,
+            },
+        )
+        for item in list(search_response.get("results") or []):
+            copied = dict(item)
+            copied["_source_table"] = table
+            raw_results.append(copied)
     label_cache: dict[str, list[str]] = {}
     required = _normalize_tags(required_tags or [])
     tag_counts: Counter[str] = Counter()
 
     filtered_candidates: list[dict[str, Any]] = []
+    seen_candidates: set[tuple[str, str]] = set()
     for item in raw_results:
+        raw_id = str(item.get("id") or "")
         text = str(item.get("text", ""))
         metadata = dict(item.get("metadata") or {})
         frontmatter = _parse_frontmatter(text)
+        doc_kind = _normalize_doc_kind(raw_id, metadata, frontmatter)
         labels = _fetch_keep_labels(str(metadata.get("keep_json_fid") or ""), label_cache)
         tags = _coerce_tags(frontmatter, labels)
         for tag in tags:
@@ -167,6 +187,13 @@ def search_keep_cards(
         normalized = _normalize_tags(tags)
         if required and not required.issubset(normalized):
             continue
+        dedupe_key = (
+            doc_kind,
+            str(metadata.get("path_in_snapshot") or ""),
+        )
+        if dedupe_key in seen_candidates:
+            continue
+        seen_candidates.add(dedupe_key)
         filtered_candidates.append(
             {
                 "raw": item,
@@ -174,6 +201,7 @@ def search_keep_cards(
                 "metadata": metadata,
                 "frontmatter": frontmatter,
                 "tags": tags,
+                "doc_kind": doc_kind,
             }
         )
 
@@ -199,6 +227,7 @@ def search_keep_cards(
             metadata = candidate["metadata"]
             frontmatter = candidate["frontmatter"]
             text = candidate["text"]
+            doc_kind = str(candidate.get("doc_kind") or "")
             reranked_hits.append(
                 SearchHit(
                     id=str(candidate["raw"].get("id") or ""),
@@ -208,7 +237,8 @@ def search_keep_cards(
                     snippet=_build_snippet(text),
                     rerank_score=score,
                     distance=float(candidate["raw"].get("_distance", 0.0)) if candidate["raw"].get("_distance") is not None else None,
-                    doc_kind=str(metadata.get("doc_kind") or frontmatter.get("doc_kind") or ""),
+                    source_table=str(candidate["raw"].get("_source_table") or ""),
+                    doc_kind=doc_kind,
                     source_type=str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
                     card_schema=str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
                     created_at=str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
@@ -232,7 +262,7 @@ def search_keep_cards(
 
     return {
         "query": query,
-        "table": table,
+        "tables": tables,
         "vector_limit": vector_limit,
         "per_page": page_size,
         "page": current_page,
@@ -251,6 +281,7 @@ def search_keep_cards(
                 "snippet": hit.snippet,
                 "rerank_score": hit.rerank_score,
                 "distance": hit.distance,
+                "source_table": hit.source_table,
                 "doc_kind": hit.doc_kind,
                 "source_type": hit.source_type,
                 "card_schema": hit.card_schema,

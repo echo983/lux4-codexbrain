@@ -58,6 +58,9 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
                 f"<span class='chip'>{html.escape(tag)}</span>"
                 for tag in item.get("tags", [])
             )
+            badge = ""
+            if item.get("doc_kind") == "asset_card":
+                badge = "<span class='card-badge'>资产卡</span>"
             title_html = html.escape(item["title"])
             md_url = str(item.get("md_url") or "").strip()
             if md_url:
@@ -67,10 +70,10 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
                 )
             rendered_results.append(
                 "<div class='result'>"
-                f"<div class='title'>{title_html}</div>"
+                f"<div class='title'>{badge}{title_html}</div>"
                 f"<div class='path'>{html.escape(item['path_in_snapshot'])}</div>"
                 f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
-                f"<div class='attrs'>score={item['rerank_score']:.4f} · created_at={html.escape(item['created_at'] or '')} · priority={html.escape(item['priority'] or '')}</div>"
+                f"<div class='attrs'>score={item['rerank_score']:.4f} · created_at={html.escape(item['created_at'] or '')} · priority={html.escape(item['priority'] or '')} · table={html.escape(item.get('source_table') or '')}</div>"
                 f"<div class='chips'>{chips}</div>"
                 "</div>"
             )
@@ -107,7 +110,8 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
     .tag {{ text-decoration: none; color: #2a2a2a; background: #ece5d8; padding: 7px 12px; border-radius: 999px; }}
     .tag span {{ color: #7b756b; }}
     .result {{ padding: 18px 0; border-top: 1px solid #ddd5c6; }}
-    .title {{ font-size: 22px; margin-bottom: 6px; }}
+    .title {{ font-size: 22px; margin-bottom: 6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }}
+    .card-badge {{ font-size: 12px; background:#171717; color:#fff; padding:3px 8px; border-radius:999px; letter-spacing:0.02em; }}
     .path {{ color: #6b665e; font-size: 13px; margin-bottom: 8px; }}
     .snippet {{ line-height: 1.55; }}
     .attrs {{ margin-top: 8px; color: #6b665e; font-size: 13px; }}
@@ -158,7 +162,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if query:
                 result = search_keep_cards(
                     query,
-                    table=self.config.table,
+                    tables=self.config.tables,
                     vector_limit=self.config.vector_limit,
                     per_page=self.config.per_page,
                     page=page,
@@ -190,7 +194,7 @@ class AppHandler(BaseHTTPRequestHandler):
         min_score = float(payload.get("min_score") or self.config.min_score)
         result = search_keep_cards(
             query,
-            table=self.config.table,
+            tables=self.config.tables,
             vector_limit=vector_limit,
             per_page=per_page,
             page=page,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .codex_exec import CodexExecClient, CodexExecError
+from .codex_mcp import CodexExecClient, CodexExecError
 from .models import ConversationSession, SystemTaskRun
 from .session_store import SessionStore
 

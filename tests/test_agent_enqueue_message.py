@@ -34,6 +34,34 @@ class AgentEnqueueMessageTests(unittest.TestCase):
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending[0].text, "hello from tool")
 
+    def test_require_context_supports_context_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context_path = Path(tmpdir) / "agent-context.json"
+            context_path.write_text(
+                """
+{
+  "LUX4_AGENT_DB_PATH": "/tmp/daemon.sqlite3",
+  "LUX4_AGENT_SESSION_KEY": "session-1",
+  "LUX4_AGENT_SOURCE": "rocketchat",
+  "LUX4_AGENT_SITE_URL": "https://rocket.example.com",
+  "LUX4_AGENT_ROOM_ID": "room-1",
+  "LUX4_AGENT_SENDER_USER_ID": "user-1",
+  "LUX4_AGENT_SENDER_USERNAME": "alice",
+  "LUX4_AGENT_TRIGGER_MESSAGE_ID": "msg-1"
+}
+                """.strip(),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {agent_enqueue_message.CONTEXT_FILE_ENV_KEY: str(context_path)},
+                clear=False,
+            ):
+                context = agent_enqueue_message.require_context()
+
+        self.assertEqual(context["LUX4_AGENT_SESSION_KEY"], "session-1")
+        self.assertEqual(context["LUX4_AGENT_ROOM_ID"], "room-1")
+
 
 def _incoming():
     from lux4_daemon.normalize import normalize_incoming_message

@@ -46,6 +46,9 @@ class DaemonService:
         self._stop_event.set()
         self._queue.put(_STOP)
         self._worker.join(timeout=5)
+        close = getattr(self._responder, "close", None)
+        if callable(close):
+            close()
 
     def accept(self, message: IncomingMessage) -> None:
         self._queue.put(message)

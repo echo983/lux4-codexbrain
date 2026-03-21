@@ -44,9 +44,7 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
     pagination = ""
     if result is not None:
         meta_summary = (
-            f"<div class='meta'>检索到 {result['filtered_hit_count']} 条候选，"
-            f"分数阈值过滤后共 {result['total_results']} 条。"
-            f"当前第 {result['page']} / {result['total_pages']} 页，每页 {result['per_page']} 条。</div>"
+            f"<div class='meta'>约 {result['total_results']} 条结果 · 第 {result['page']} 页，共 {result['total_pages']} 页</div>"
         )
         tag_links = "".join(
             f"<a class='tag' href='/search?q={html.escape(query)}&tag={html.escape(item['tag'])}'>{html.escape(item['tag'])} <span>{item['count']}</span></a>"

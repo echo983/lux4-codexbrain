@@ -13,7 +13,7 @@ DEFAULT_TABLES = [
 ]
 DEFAULT_VECTOR_LIMIT = 50
 DEFAULT_PER_PAGE = 20
-DEFAULT_MIN_SCORE = 0.4
+DEFAULT_MIN_SCORE = 0.1
 
 
 def _load_dotenv_file(path: Path) -> dict[str, str]:

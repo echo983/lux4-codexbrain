@@ -38,6 +38,18 @@ class SearchHit:
     keep_json_fid: str
 
 
+def _prefer_hit(left: SearchHit, right: SearchHit) -> SearchHit:
+    if left.doc_kind == right.doc_kind:
+        left_score = left.rerank_score if left.rerank_score is not None else float("-inf")
+        right_score = right.rerank_score if right.rerank_score is not None else float("-inf")
+        return left if left_score >= right_score else right
+    if left.doc_kind == "asset_card":
+        return left
+    if right.doc_kind == "asset_card":
+        return right
+    return left
+
+
 def _parse_frontmatter(text: str) -> dict[str, Any]:
     match = FRONTMATTER_RE.match(text)
     if not match:
@@ -250,7 +262,22 @@ def search_keep_cards(
                 )
             )
 
-    total_results = len(reranked_hits)
+    deduped_hits: list[SearchHit] = []
+    by_keep_md_fid: dict[str, SearchHit] = {}
+    for hit in reranked_hits:
+        keep_md_fid = hit.keep_md_fid.strip()
+        if keep_md_fid:
+            existing = by_keep_md_fid.get(keep_md_fid)
+            if existing is None:
+                by_keep_md_fid[keep_md_fid] = hit
+            else:
+                by_keep_md_fid[keep_md_fid] = _prefer_hit(existing, hit)
+            continue
+        deduped_hits.append(hit)
+    deduped_hits.extend(by_keep_md_fid.values())
+    deduped_hits.sort(key=lambda hit: hit.rerank_score if hit.rerank_score is not None else float("-inf"), reverse=True)
+
+    total_results = len(deduped_hits)
     current_page = max(1, page)
     page_size = max(1, per_page)
     total_pages = max(1, (total_results + page_size - 1) // page_size) if total_results else 1
@@ -258,7 +285,7 @@ def search_keep_cards(
         current_page = total_pages
     start = (current_page - 1) * page_size
     end = start + page_size
-    paged_hits = reranked_hits[start:end]
+    paged_hits = deduped_hits[start:end]
 
     return {
         "query": query,

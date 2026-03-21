@@ -200,7 +200,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["id"], "dup-1")
 
-    def test_search_keeps_asset_card_and_raw_text_for_same_path(self) -> None:
+    def test_search_prefers_asset_card_when_keep_md_matches(self) -> None:
         asset = {
             "id": "asset-1",
             "text": "---\ndoc_kind: asset_card\nsource_type: google_keep\ncard_schema: deep_asset_card_v1\ntags: []\nretrieval_terms: []\ncategory_path: \"notes/google-keep\"\ncreated_at: 2026-01-01\npriority: \"medium\"\n---\n\n# Alpha\n\nhello",
@@ -255,8 +255,8 @@ class MorewaySearchServiceTests(unittest.TestCase):
                                         min_score=0.0,
                                     )
         self.assertEqual(result["filtered_hit_count"], 2)
-        self.assertEqual(len(result["results"]), 2)
-        self.assertEqual({item["doc_kind"] for item in result["results"]}, {"asset_card", "raw_text"})
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["doc_kind"], "asset_card")
 
     def test_http_search_api_returns_json(self) -> None:
         config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4)

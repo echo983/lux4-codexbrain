@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from lux4_daemon.codex_exec import CodexExecError, CodexTurnResult
+from lux4_daemon.codex_mcp import CodexExecError, CodexTurnResult
 from lux4_daemon.session_store import SessionStore
 from lux4_daemon.system_tasks import SystemTaskRunner
 

@@ -12,7 +12,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from lux4_daemon.codex_exec import CodexExecClient
+from lux4_daemon.codex_mcp import CodexExecClient
 from lux4_daemon.config import Config
 from lux4_daemon.session_store import SessionStore
 from lux4_daemon.system_tasks import SystemTaskRunner
@@ -26,8 +26,12 @@ def main() -> int:
 
     config = Config.from_env()
     store = SessionStore(config.database_path)
-    runner = SystemTaskRunner(store, CodexExecClient(config), log_dir=args.log_dir)
-    result = runner.run_memory_consolidation(window_hours=args.window_hours)
+    client = CodexExecClient(config)
+    runner = SystemTaskRunner(store, client, log_dir=args.log_dir)
+    try:
+        result = runner.run_memory_consolidation(window_hours=args.window_hours)
+    finally:
+        client.close()
     json.dump(
         {
             "task_type": result.task_type,

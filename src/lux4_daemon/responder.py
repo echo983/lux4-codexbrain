@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from dataclasses import dataclass
+from typing import Any
 
-from .codex_exec import CodexExecClient, CodexResumeError
+from .codex_mcp import CodexExecClient, CodexResumeError
 from .config import Config
 from .models import ConversationSession, IncomingMessage, ReplyMessage
 from .session_store import SessionStore
@@ -21,10 +22,18 @@ class ResponderResult:
 
 
 class CodexResponder:
-    def __init__(self, store: SessionStore, client: CodexExecClient, config: Config | None = None) -> None:
+    def __init__(
+        self,
+        store: SessionStore,
+        client: CodexExecClient,
+        config: Config | None = None,
+    ) -> None:
         self._store = store
         self._client = client
         self._debug_sessions = bool(config.debug_sessions) if config is not None else False
+
+    def close(self) -> None:
+        self._client.close()
 
     def build_reply(self, message: IncomingMessage, session: ConversationSession) -> ResponderResult:
         prompt = self._build_prompt(message)
@@ -58,13 +67,24 @@ class CodexResponder:
                     session_id=current_session_id,
                     debug_label=message.message_id,
                     context=context,
+                    on_event=self._build_event_logger(message),
                 )
             except CodexResumeError:
                 self._store.clear_active_codex_session(session.session_key)
                 resume_restarted = True
-                turn = self._client.run_turn(prompt, debug_label=message.message_id, context=context)
+                turn = self._client.run_turn(
+                    prompt,
+                    debug_label=message.message_id,
+                    context=context,
+                    on_event=self._build_event_logger(message),
+                )
         else:
-            turn = self._client.run_turn(prompt, debug_label=message.message_id, context=context)
+            turn = self._client.run_turn(
+                prompt,
+                debug_label=message.message_id,
+                context=context,
+                on_event=self._build_event_logger(message),
+            )
 
         if self._debug_sessions:
             LOGGER.info(
@@ -94,10 +114,29 @@ class CodexResponder:
             resume_restarted=resume_restarted,
         )
 
+    def _build_event_logger(self, message: IncomingMessage):
+        def on_event(payload: dict[str, Any]) -> None:
+            if not self._debug_sessions:
+                return
+            params = payload.get("params")
+            if not isinstance(params, dict):
+                return
+            msg = params.get("msg")
+            if not isinstance(msg, dict):
+                return
+            event_type = msg.get("type")
+            if isinstance(event_type, str):
+                LOGGER.info(
+                    "codex mcp event: message_id=%s type=%s",
+                    message.message_id,
+                    event_type,
+                )
+
+        return on_event
+
     def _build_prompt(self, message: IncomingMessage) -> str:
         local_timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
         return "\n".join([
-            "Delivery rule: any user-facing message must be sent via lux4-send-message. Final output is ignored.",
             f"Local timestamp: {local_timestamp}",
             f"Room ID: {message.room_id}",
             f"User ID: {message.sender_user_id}",

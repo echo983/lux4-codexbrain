@@ -4,11 +4,13 @@ from io import BytesIO
 import json
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from lux4_daemon.codex_exec import CodexExecClient, CodexExecError, CodexResumeError, CodexTurnResult
+from lux4_daemon.codex_mcp import CodexExecClient, CodexExecError, CodexResumeError, CodexTurnResult
 from lux4_daemon.config import Config, load_dotenv_file
 from lux4_daemon.http import read_json_body
 from lux4_daemon.models import ReplyMessage
@@ -296,29 +298,36 @@ class CodexExecClientTest(unittest.TestCase):
             neo4j_password="secret-pass",
         )
         client = CodexExecClient(config)
+        fake_response = {
+            "result": {
+                "structuredContent": {
+                    "threadId": "thread-123",
+                    "content": "hello from codex",
+                },
+                "content": [{"type": "text", "text": "hello from codex"}],
+            }
+        }
 
-        def fake_run(command, cwd, env, capture_output, text, timeout, check):
-            self.assertIn("--full-auto", command)
-            self.assertNotIn("--sandbox", command)
-            output_path = Path(command[command.index("-o") + 1])
-            output_path.write_text("hello from codex\n", encoding="utf-8")
-            self.assertEqual(env["CODEX_API_KEY"], "api-key")
-            self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
-            self.assertEqual(env["NEO4J_USERNAME"], "neo4j-user")
-            self.assertEqual(env["NEO4J_PASSWORD"], "secret-pass")
-            self.assertEqual(env["LUX4_AGENT_DB_PATH"], "var/test.sqlite3")
-            self.assertEqual(env["LUX4_AGENT_ROOM_ID"], "room-1")
-            return mock.Mock(
-                returncode=0,
-                stdout='{"type":"thread.started","thread_id":"thread-123"}\n',
-                stderr="",
-            )
-
-        with mock.patch("lux4_daemon.codex_exec.subprocess.run", side_effect=fake_run):
+        with mock.patch.object(client, "_call_tool", return_value=(fake_response, ['{"jsonrpc":"2.0"}'])) as call_mock:
             result = client.run_turn("reply please", context={"LUX4_AGENT_ROOM_ID": "room-1"})
+
+        arguments = call_mock.call_args.args[1]
+        env = client._build_env()
+        context_payload = json.loads(client._context_file_path.read_text(encoding="utf-8"))
 
         self.assertEqual(result.session_id, "thread-123")
         self.assertEqual(result.reply_text, "hello from codex")
+        self.assertEqual(arguments["approval-policy"], "never")
+        self.assertEqual(arguments["sandbox"], "workspace-write")
+        self.assertEqual(arguments["cwd"], str(Path.cwd()))
+        self.assertIn("lux4-send-message", arguments["developer-instructions"])
+        self.assertIn("所有面向用户的消息，包括中间更新和最终答案，都必须通过 `lux4-send-message` 发送。", arguments["developer-instructions"])
+        self.assertEqual(env["CODEX_API_KEY"], "api-key")
+        self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
+        self.assertEqual(env["NEO4J_USERNAME"], "neo4j-user")
+        self.assertEqual(env["NEO4J_PASSWORD"], "secret-pass")
+        self.assertEqual(env["LUX4_AGENT_DB_PATH"], "var/test.sqlite3")
+        self.assertEqual(context_payload["LUX4_AGENT_ROOM_ID"], "room-1")
 
     def test_writes_debug_jsonl_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -330,47 +339,84 @@ class CodexExecClientTest(unittest.TestCase):
                 debug_codex_jsonl_dir=tmpdir,
             )
             client = CodexExecClient(config)
+            fake_response = {
+                "result": {
+                    "structuredContent": {
+                        "threadId": "thread-123",
+                        "content": "hello from codex",
+                    }
+                }
+            }
 
-            def fake_run(command, cwd, env, capture_output, text, timeout, check):
-                output_path = Path(command[command.index("-o") + 1])
-                output_path.write_text("hello from codex\n", encoding="utf-8")
-                return mock.Mock(
-                    returncode=0,
-                    stdout='{"type":"thread.started","thread_id":"thread-123"}\n{"type":"turn.completed"}\n',
-                    stderr="",
-                )
-
-            with mock.patch("lux4_daemon.codex_exec.subprocess.run", side_effect=fake_run):
+            with mock.patch.object(
+                client,
+                "_call_tool",
+                return_value=(fake_response, ['{"jsonrpc":"2.0","id":2}', '{"jsonrpc":"2.0","id":2,"result":{}}']),
+            ):
                 client.run_turn("reply please", debug_label="msg-1")
 
             files = sorted(Path(tmpdir).glob("*.jsonl"))
             self.assertEqual(len(files), 1)
-            self.assertIn('"thread_id":"thread-123"', files[0].read_text(encoding="utf-8"))
+            self.assertIn('"jsonrpc":"2.0"', files[0].read_text(encoding="utf-8"))
 
-    def test_resume_command_does_not_include_sandbox_flag(self) -> None:
+    def test_forwards_codex_event_notifications_to_callback(self) -> None:
         client = CodexExecClient(Config(
             database_path="var/test.sqlite3",
             neo4j_uri="bolt://graph.example:7687",
             neo4j_username="neo4j-user",
             neo4j_password="secret-pass",
         ))
+        seen: list[dict[str, object]] = []
+        event_payload = {
+            "jsonrpc": "2.0",
+            "method": "codex/event",
+            "params": {"msg": {"type": "task_started"}},
+        }
+        fake_response = {
+            "result": {
+                "structuredContent": {
+                    "threadId": "thread-123",
+                    "content": "hello",
+                }
+            }
+        }
 
-        def fake_run(command, cwd, env, capture_output, text, timeout, check):
-            self.assertNotIn("--sandbox", command)
-            self.assertEqual(command[:4], ["codex", "exec", "resume", "thread-123"])
-            output_path = Path(command[command.index("-o") + 1])
-            output_path.write_text("hello again\n", encoding="utf-8")
-            return mock.Mock(
-                returncode=0,
-                stdout='{"type":"thread.started","thread_id":"thread-123"}\n',
-                stderr="",
-            )
+        def fake_call(tool_name, arguments, *, on_event=None):
+            if on_event is not None:
+                on_event(event_payload)
+            return fake_response, ['{"jsonrpc":"2.0","method":"codex/event"}']
 
-        with mock.patch("lux4_daemon.codex_exec.subprocess.run", side_effect=fake_run):
+        with mock.patch.object(client, "_call_tool", side_effect=fake_call):
+            result = client.run_turn("reply please", on_event=seen.append)
+
+        self.assertEqual(result.reply_text, "hello")
+        self.assertEqual(seen, [event_payload])
+
+    def test_resume_uses_codex_reply_tool(self) -> None:
+        client = CodexExecClient(Config(
+            database_path="var/test.sqlite3",
+            neo4j_uri="bolt://graph.example:7687",
+            neo4j_username="neo4j-user",
+            neo4j_password="secret-pass",
+        ))
+        fake_response = {
+            "result": {
+                "structuredContent": {
+                    "threadId": "thread-123",
+                    "content": "hello again",
+                }
+            }
+        }
+
+        with mock.patch.object(client, "_call_tool", return_value=(fake_response, ['{"jsonrpc":"2.0"}'])) as call_mock:
             result = client.run_turn("reply please", session_id="thread-123")
 
         self.assertEqual(result.session_id, "thread-123")
         self.assertEqual(result.reply_text, "hello again")
+        self.assertEqual(call_mock.call_args.args[0], "codex-reply")
+        self.assertEqual(call_mock.call_args.args[1]["threadId"], "thread-123")
+        self.assertNotIn("sandbox", call_mock.call_args.args[1])
+        self.assertIn("lux4-send-message", call_mock.call_args.args[1]["developer-instructions"])
 
     def test_resume_failure_raises_specific_error(self) -> None:
         client = CodexExecClient(Config(
@@ -378,11 +424,28 @@ class CodexExecClientTest(unittest.TestCase):
             neo4j_username="neo4j-user",
             neo4j_password="secret-pass",
         ))
-        with mock.patch(
-            "lux4_daemon.codex_exec.subprocess.run",
-            return_value=mock.Mock(returncode=1, stdout="", stderr="resume failed"),
-        ):
+        with mock.patch.object(client, "_call_tool", side_effect=CodexExecError("resume failed")):
             with self.assertRaises(CodexResumeError):
+                client.run_turn("reply please", session_id="thread-123")
+
+    def test_resume_error_result_raises_specific_error(self) -> None:
+        client = CodexExecClient(Config(
+            neo4j_uri="bolt://graph.example:7687",
+            neo4j_username="neo4j-user",
+            neo4j_password="secret-pass",
+        ))
+        fake_response = {
+            "result": {
+                "isError": True,
+                "structuredContent": {
+                    "threadId": "thread-123",
+                    "content": "Session not found for thread_id: thread-123",
+                },
+                "content": [{"type": "text", "text": "Session not found for thread_id: thread-123"}],
+            }
+        }
+        with mock.patch.object(client, "_call_tool", return_value=(fake_response, ['{"jsonrpc":"2.0"}'])):
+            with self.assertRaisesRegex(CodexResumeError, "Session not found"):
                 client.run_turn("reply please", session_id="thread-123")
 
     def test_resume_timeout_raises_specific_error(self) -> None:
@@ -392,21 +455,18 @@ class CodexExecClientTest(unittest.TestCase):
             neo4j_password="secret-pass",
             codex_timeout_seconds=12,
         ))
-        with mock.patch(
-            "lux4_daemon.codex_exec.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["codex", "exec", "resume", "thread-123"], timeout=12),
-        ):
+        with mock.patch.object(client, "_call_tool", side_effect=CodexExecError("codex MCP timed out after 12.0 seconds")):
             with self.assertRaisesRegex(CodexResumeError, "timed out after 12.0 seconds"):
                 client.run_turn("reply please", session_id="thread-123")
 
     def test_run_turn_fails_fast_when_neo4j_config_is_missing(self) -> None:
         client = CodexExecClient(Config())
 
-        with mock.patch("lux4_daemon.codex_exec.subprocess.run") as run_mock:
+        with mock.patch.object(client, "_call_tool") as call_mock:
             with self.assertRaisesRegex(CodexExecError, "Missing required Neo4j configuration"):
                 client.run_turn("reply please")
 
-        run_mock.assert_not_called()
+        call_mock.assert_not_called()
 
 
 class CodexResponderTest(unittest.TestCase):
@@ -488,15 +548,12 @@ class CodexResponderTest(unittest.TestCase):
 
         prompt = responder._build_prompt(message)
 
-        self.assertIn(
-            "Delivery rule: any user-facing message must be sent via lux4-send-message. Final output is ignored.",
-            prompt,
-        )
         self.assertIn("Local timestamp: ", prompt)
         self.assertIn("Room ID: room-1", prompt)
         self.assertIn("User ID: user-1", prompt)
         self.assertIn("Username: alice", prompt)
         self.assertIn("Latest user message:\nhello echo", prompt)
+        self.assertNotIn("lux4-send-message", prompt)
         self.assertNotIn("You are Lux, an IM assistant.", prompt)
         self.assertNotIn("neo4j-cypher-ops", prompt)
 
@@ -561,6 +618,64 @@ class DaemonOutboxFlowTest(unittest.TestCase):
 
             self.assertEqual([m.text for m in publisher.messages], ["agent proactive message", "final reply"])
             self.assertEqual(store.get_pending_outbox_messages(message.session_key), [])
+            service.stop()
+
+    def test_service_publishes_new_outbox_message_while_turn_is_still_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            publisher = CapturingPublisher()
+            final_release = threading.Event()
+            proactive_published = threading.Event()
+            message = _build_incoming_message()
+
+            class ObservingPublisher(CapturingPublisher):
+                def publish(self, outgoing: ReplyMessage) -> None:
+                    super().publish(outgoing)
+                    if outgoing.text == "agent proactive message":
+                        proactive_published.set()
+
+            publisher = ObservingPublisher()
+
+            def slow_build_reply(incoming, session):
+                self.assertFalse(proactive_published.is_set())
+                queued = store.enqueue_outbox_message(
+                    session_key=session.session_key,
+                    source=incoming.source,
+                    site_url=incoming.site_url,
+                    room_id=incoming.room_id,
+                    sender_user_id=incoming.sender_user_id,
+                    sender_username=incoming.sender_username,
+                    trigger_message_id=incoming.message_id,
+                    text="agent proactive message",
+                )
+                self.assertIsNotNone(queued.outbox_id)
+                self.assertTrue(proactive_published.wait(timeout=2))
+                final_release.wait(timeout=2)
+                return mock.Mock(
+                    reply=ReplyMessage(
+                        version=1,
+                        kind="reply_message",
+                        source="rocketchat",
+                        siteUrl="https://rocket.example.com",
+                        roomId="room-1",
+                        replyMode="message",
+                        text="final reply",
+                    ),
+                    codex_session_id="thread-123",
+                )
+
+            responder = mock.Mock()
+            responder.build_reply.side_effect = slow_build_reply
+            service = DaemonService(store=store, publisher=publisher, responder=responder)
+            service.start()
+
+            service.accept(message)
+            self.assertTrue(proactive_published.wait(timeout=3))
+            self.assertEqual([m.text for m in publisher.messages], ["agent proactive message"])
+            final_release.set()
+            service._queue.join()
+
+            self.assertEqual([m.text for m in publisher.messages], ["agent proactive message", "final reply"])
             service.stop()
 
 

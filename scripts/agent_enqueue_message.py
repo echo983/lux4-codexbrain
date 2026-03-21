@@ -23,6 +23,7 @@ REQUIRED_ENV_KEYS = [
     "LUX4_AGENT_SENDER_USERNAME",
     "LUX4_AGENT_TRIGGER_MESSAGE_ID",
 ]
+CONTEXT_FILE_ENV_KEY = "LUX4_AGENT_CONTEXT_FILE"
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,11 +32,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _load_context_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        raise SystemExit(f"Lux4 agent context file not found: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Lux4 agent context file is not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Lux4 agent context file must contain a JSON object: {path}")
+    return {
+        key: str(value).strip()
+        for key, value in payload.items()
+        if isinstance(key, str) and str(value).strip()
+    }
+
+
 def require_context() -> dict[str, str]:
-    missing = [key for key in REQUIRED_ENV_KEYS if not os.environ.get(key)]
+    context: dict[str, str] = {}
+    context_file = os.environ.get(CONTEXT_FILE_ENV_KEY, "").strip()
+    if context_file:
+        context.update(_load_context_file(Path(context_file)))
+    for key in REQUIRED_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            context[key] = value
+    missing = [key for key in REQUIRED_ENV_KEYS if not context.get(key)]
     if missing:
         raise SystemExit("Missing required lux4 agent context: " + ", ".join(missing))
-    return {key: os.environ[key] for key in REQUIRED_ENV_KEYS}
+    return {key: context[key] for key in REQUIRED_ENV_KEYS}
 
 
 def enqueue_message(text: str, context: dict[str, str]) -> dict[str, str]:

@@ -65,8 +65,48 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["title"], "Alpha")
         self.assertEqual(result["results"][0]["tags"], ["china"])
 
+    def test_search_includes_md_url(self) -> None:
+        with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
+            with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
+                with mock.patch("moreway_search_service.search.resolve_nbss_server_endpoint", return_value="http://localhost:8080"):
+                    with mock.patch("moreway_search_service.search.get_embeddings", return_value=[[0.1, 0.2]]):
+                        with mock.patch(
+                            "moreway_search_service.search.post_json",
+                            return_value={
+                                "results": [
+                                    {
+                                        "id": "1",
+                                        "text": "---\nsource_type: google_keep\ntags: []\nretrieval_terms: []\ncategory_path: \"notes/google-keep\"\ncreated_at: 2026-01-01\npriority: \"medium\"\n---\n\n# Alpha\n\nhello",
+                                        "metadata": {
+                                            "note_title": "Alpha",
+                                            "path_in_snapshot": "Alpha.json",
+                                            "keep_json_fid": "NBSS:0xAAA",
+                                            "keep_md_fid": "NBSS:0xDDD",
+                                        },
+                                        "_distance": 0.1,
+                                    }
+                                ]
+                            },
+                        ):
+                            with mock.patch(
+                                "moreway_search_service.search.fetch_source_text",
+                                return_value=json.dumps({"labels": []}),
+                            ):
+                                with mock.patch(
+                                    "moreway_search_service.search.rerank",
+                                    return_value=[{"id": 0, "score": 0.9}],
+                                ):
+                                    result = search_keep_cards(
+                                        "test",
+                                        table="t",
+                                        vector_limit=10,
+                                        result_limit=5,
+                                        required_tags=[],
+                                    )
+        self.assertEqual(result["results"][0]["md_url"], "http://localhost:8080/nbss/0xDDD")
+
     def test_http_search_api_returns_json(self) -> None:
-        config = Config(host="127.0.0.1", port=18561, table="cards", vector_limit=20, result_limit=5)
+        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, result_limit=5)
         server = build_server(config)
         try:
             with mock.patch(
@@ -89,8 +129,9 @@ class MorewaySearchServiceTests(unittest.TestCase):
 
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
+                host, port = server.server_address
                 req = urllib.request.Request(
-                    "http://127.0.0.1:18561/api/v1/search",
+                    f"http://{host}:{port}/api/v1/search",
                     data=json.dumps({"query": "china", "tags": ["geo"]}).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                     method="POST",
@@ -103,3 +144,51 @@ class MorewaySearchServiceTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_search_page_links_title_to_md_url(self) -> None:
+        config = Config(host="127.0.0.1", port=0, table="cards", vector_limit=20, result_limit=5)
+        server = build_server(config)
+        try:
+            with mock.patch(
+                "moreway_search_service.http.search_keep_cards",
+                return_value={
+                    "query": "china",
+                    "table": "cards",
+                    "vector_limit": 20,
+                    "result_limit": 5,
+                    "required_tags": [],
+                    "vector_hit_count": 2,
+                    "filtered_hit_count": 1,
+                    "results": [{
+                        "title": "Alpha",
+                        "path_in_snapshot": "Alpha.json",
+                        "snippet": "x",
+                        "rerank_score": 0.9,
+                        "created_at": "",
+                        "priority": "",
+                        "tags": [],
+                        "keep_md_fid": "NBSS:0xDDD",
+                        "md_url": "http://localhost:8080/nbss/0xDDD",
+                        "keep_json_fid": "",
+                        "note_title": "Alpha",
+                        "id": "1",
+                        "distance": 0.1,
+                        "source_type": "google_keep",
+                        "category_path": "",
+                    }],
+                    "available_tags": [],
+                    "models": {"embedding": "e", "reranker": "r"},
+                },
+            ):
+                import threading
+                import urllib.request
+
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                host, port = server.server_address
+                with urllib.request.urlopen(f"http://{host}:{port}/search?q=china", timeout=5) as response:
+                    body = response.read().decode("utf-8")
+                self.assertIn("http://localhost:8080/nbss/0xDDD", body)
+                self.assertIn(">Alpha</a>", body)
+        finally:
+            server.shutdown()
+            server.server_close()

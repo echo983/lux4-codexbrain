@@ -8,6 +8,7 @@ from typing import Any
 
 from scripts.cloudflare_bge_m3_embed import get_embeddings, resolve_config as resolve_embedding_config
 from scripts.cloudflare_bge_reranker_base import rerank, resolve_config as resolve_reranker_config
+from scripts.build_notfinder_snapshot_static_site import nbss_object_url, resolve_nbss_server_endpoint
 from scripts.google_keep_json_to_md import fetch_source_text
 from scripts.lancedb_local_api import post_json, resolve_lancedb_url
 
@@ -132,6 +133,7 @@ def search_keep_cards(
     result_limit: int,
     required_tags: list[str] | None = None,
 ) -> dict[str, Any]:
+    server_endpoint = resolve_nbss_server_endpoint()
     emb_account_id, emb_token, emb_model = resolve_embedding_config()
     rerank_account_id, rerank_token, rerank_model = resolve_reranker_config()
     query_vector = get_embeddings([query], account_id=emb_account_id, token=emb_token, model=emb_model)[0]
@@ -232,6 +234,7 @@ def search_keep_cards(
                 "category_path": hit.category_path,
                 "priority": hit.priority,
                 "keep_md_fid": hit.keep_md_fid,
+                "md_url": nbss_object_url(hit.keep_md_fid, server_endpoint=server_endpoint) if hit.keep_md_fid else "",
                 "keep_json_fid": hit.keep_json_fid,
             }
             for hit in reranked_hits
@@ -245,4 +248,3 @@ def search_keep_cards(
             "reranker": rerank_model,
         },
     }
-

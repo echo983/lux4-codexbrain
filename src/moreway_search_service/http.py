@@ -46,9 +46,16 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
                 f"<span class='chip'>{html.escape(tag)}</span>"
                 for tag in item.get("tags", [])
             )
+            title_html = html.escape(item["title"])
+            md_url = str(item.get("md_url") or "").strip()
+            if md_url:
+                title_html = (
+                    f"<a href='{html.escape(md_url)}' target='_blank' rel='noopener noreferrer'>"
+                    f"{title_html}</a>"
+                )
             rendered_results.append(
                 "<div class='result'>"
-                f"<div class='title'>{html.escape(item['title'])}</div>"
+                f"<div class='title'>{title_html}</div>"
                 f"<div class='path'>{html.escape(item['path_in_snapshot'])}</div>"
                 f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
                 f"<div class='attrs'>score={item['rerank_score']:.4f} · created_at={html.escape(item['created_at'] or '')} · priority={html.escape(item['priority'] or '')}</div>"

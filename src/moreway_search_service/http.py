@@ -56,9 +56,6 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
                 f"<span class='chip'>{html.escape(tag)}</span>"
                 for tag in item.get("tags", [])
             )
-            badge = ""
-            if item.get("doc_kind") == "asset_card":
-                badge = "<span class='card-badge'>资产卡</span>"
             title_html = html.escape(item["title"])
             md_url = str(item.get("md_url") or "").strip()
             if md_url:
@@ -66,15 +63,50 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
                     f"<a href='{html.escape(md_url)}' target='_blank' rel='noopener noreferrer'>"
                     f"{title_html}</a>"
                 )
-            rendered_results.append(
-                "<div class='result'>"
-                f"<div class='title'>{badge}{title_html}</div>"
-                f"<div class='path'>{html.escape(item['path_in_snapshot'])}</div>"
-                f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
-                f"<div class='attrs'>score={item['rerank_score']:.4f} · created_at={html.escape(item['created_at'] or '')} · priority={html.escape(item['priority'] or '')} · table={html.escape(item.get('source_table') or '')}</div>"
-                f"<div class='chips'>{chips}</div>"
-                "</div>"
-            )
+            is_asset_card = item.get("doc_kind") == "asset_card"
+            if is_asset_card:
+                info_bits = []
+                if item.get("category_path"):
+                    info_bits.append(f"分类 {html.escape(item['category_path'])}")
+                if item.get("priority"):
+                    info_bits.append(f"优先级 {html.escape(item['priority'])}")
+                if item.get("created_at"):
+                    info_bits.append(f"创建于 {html.escape(item['created_at'])}")
+                info_line = " · ".join(info_bits)
+                asset_details = []
+                if item.get("core_view"):
+                    asset_details.append(
+                        f"<div class='asset-line'><span class='asset-key'>核心观点</span><span class='asset-value'>{html.escape(item['core_view'])}</span></div>"
+                    )
+                if item.get("intent"):
+                    asset_details.append(
+                        f"<div class='asset-line'><span class='asset-key'>意图识别</span><span class='asset-value'>{html.escape(item['intent'])}</span></div>"
+                    )
+                if item.get("cognitive_asset"):
+                    asset_details.append(
+                        f"<div class='asset-line'><span class='asset-key'>认知资产</span><span class='asset-value'>{html.escape(item['cognitive_asset'])}</span></div>"
+                    )
+                rendered_results.append(
+                    "<div class='result asset-result'>"
+                    f"<div class='title'><span class='card-badge'>资产卡</span>{title_html}</div>"
+                    f"<div class='asset-meta'>{info_line}</div>"
+                    f"<div class='path'>{html.escape(item['path_in_snapshot'])}</div>"
+                    f"<div class='asset-details'>{''.join(asset_details)}</div>"
+                    f"<div class='snippet asset-snippet'><span class='asset-key'>原始摘录</span><span class='asset-value'>{html.escape(item['snippet'])}</span></div>"
+                    f"<div class='attrs'>score={item['rerank_score']:.4f} · table={html.escape(item.get('source_table') or '')}</div>"
+                    f"<div class='chips'>{chips}</div>"
+                    "</div>"
+                )
+            else:
+                rendered_results.append(
+                    "<div class='result'>"
+                    f"<div class='title'>{title_html}</div>"
+                    f"<div class='path'>{html.escape(item['path_in_snapshot'])}</div>"
+                    f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
+                    f"<div class='attrs'>score={item['rerank_score']:.4f} · created_at={html.escape(item['created_at'] or '')} · table={html.escape(item.get('source_table') or '')}</div>"
+                    f"<div class='chips'>{chips}</div>"
+                    "</div>"
+                )
         result_items = "".join(rendered_results)
         if result["total_pages"] > 1:
             current = int(result["page"])
@@ -108,10 +140,17 @@ def _render_search_page(config: Config, query: str, tags: list[str], result: dic
     .tag {{ text-decoration: none; color: #2a2a2a; background: #ece5d8; padding: 7px 12px; border-radius: 999px; }}
     .tag span {{ color: #7b756b; }}
     .result {{ padding: 18px 0; border-top: 1px solid #ddd5c6; }}
+    .asset-result {{ background: #fffdfa; border: 1px solid #e6dccb; border-radius: 18px; padding: 18px 18px 16px; margin: 14px 0; box-shadow: 0 1px 0 rgba(0,0,0,0.02); }}
     .title {{ font-size: 22px; margin-bottom: 6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }}
     .card-badge {{ font-size: 12px; background:#171717; color:#fff; padding:3px 8px; border-radius:999px; letter-spacing:0.02em; }}
+    .asset-meta {{ color: #5f5a51; font-size: 13px; margin-bottom: 8px; }}
     .path {{ color: #6b665e; font-size: 13px; margin-bottom: 8px; }}
     .snippet {{ line-height: 1.55; }}
+    .asset-snippet {{ margin-top: 10px; display: grid; gap: 6px; }}
+    .asset-details {{ display: grid; gap: 8px; margin: 12px 0 10px; }}
+    .asset-line {{ display: grid; gap: 4px; }}
+    .asset-key {{ font-size: 12px; color: #7b756b; letter-spacing: 0.02em; }}
+    .asset-value {{ line-height: 1.55; }}
     .attrs {{ margin-top: 8px; color: #6b665e; font-size: 13px; }}
     .chips {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }}
     .chip {{ background: #f0ece3; color: #534f48; padding: 4px 8px; border-radius: 999px; font-size: 12px; }}

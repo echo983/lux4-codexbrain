@@ -15,6 +15,7 @@ from scripts.lancedb_local_api import post_json, resolve_lancedb_url
 
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.S)
 TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.M)
+CARD_FIELD_RE = re.compile(r"^\>\s+\*\*(核心观点|意图识别|认知资产)\*\*：\s*(.+?)\s*$", re.M)
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,9 @@ class SearchHit:
     priority: str
     keep_md_fid: str
     keep_json_fid: str
+    core_view: str
+    intent: str
+    cognitive_asset: str
 
 
 def _prefer_hit(left: SearchHit, right: SearchHit) -> SearchHit:
@@ -98,6 +102,23 @@ def _build_snippet(text: str, max_chars: int = 220) -> str:
     if len(body) <= max_chars:
         return body
     return body[: max_chars - 1].rstrip() + "…"
+
+
+def _extract_card_fields(text: str) -> tuple[str, str, str]:
+    core_view = ""
+    intent = ""
+    cognitive_asset = ""
+    for label, value in CARD_FIELD_RE.findall(text):
+        cleaned = re.sub(r"\s+", " ", value).strip()
+        if not cleaned:
+            continue
+        if label == "核心观点" and not core_view:
+            core_view = cleaned
+        elif label == "意图识别" and not intent:
+            intent = cleaned
+        elif label == "认知资产" and not cognitive_asset:
+            cognitive_asset = cleaned
+    return core_view, intent, cognitive_asset
 
 
 def _fetch_keep_labels(keep_json_fid: str, cache: dict[str, list[str]]) -> list[str]:
@@ -240,6 +261,7 @@ def search_keep_cards(
             frontmatter = candidate["frontmatter"]
             text = candidate["text"]
             doc_kind = str(candidate.get("doc_kind") or "")
+            core_view, intent, cognitive_asset = _extract_card_fields(text)
             reranked_hits.append(
                 SearchHit(
                     id=str(candidate["raw"].get("id") or ""),
@@ -259,6 +281,9 @@ def search_keep_cards(
                     priority=str(metadata.get("priority") or frontmatter.get("priority") or ""),
                     keep_md_fid=str(metadata.get("keep_md_fid") or ""),
                     keep_json_fid=str(metadata.get("keep_json_fid") or ""),
+                    core_view=core_view,
+                    intent=intent,
+                    cognitive_asset=cognitive_asset,
                 )
             )
 
@@ -319,6 +344,9 @@ def search_keep_cards(
                 "keep_md_fid": hit.keep_md_fid,
                 "md_url": nbss_object_url(hit.keep_md_fid, server_endpoint=server_endpoint) if hit.keep_md_fid else "",
                 "keep_json_fid": hit.keep_json_fid,
+                "core_view": hit.core_view,
+                "intent": hit.intent,
+                "cognitive_asset": hit.cognitive_asset,
             }
             for hit in paged_hits
         ],

@@ -203,7 +203,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
     def test_search_prefers_asset_card_when_keep_md_matches(self) -> None:
         asset = {
             "id": "asset-1",
-            "text": "---\ndoc_kind: asset_card\nsource_type: google_keep\ncard_schema: deep_asset_card_v1\ntags: []\nretrieval_terms: []\ncategory_path: \"notes/google-keep\"\ncreated_at: 2026-01-01\npriority: \"medium\"\n---\n\n# Alpha\n\nhello",
+            "text": "---\ndoc_kind: asset_card\nsource_type: google_keep\ncard_schema: deep_asset_card_v1\ntags: []\nretrieval_terms: []\ncategory_path: \"notes/google-keep\"\ncreated_at: 2026-01-01\npriority: \"medium\"\n---\n\n# Alpha\n\n> **核心观点**：一条核心观点\n> **意图识别**：一条意图识别\n> **认知资产**：一条认知资产\n\nhello",
             "metadata": {
                 "doc_kind": "asset_card",
                 "source_type": "google_keep",
@@ -257,6 +257,77 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["filtered_hit_count"], 2)
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["doc_kind"], "asset_card")
+        self.assertEqual(result["results"][0]["core_view"], "一条核心观点")
+        self.assertEqual(result["results"][0]["intent"], "一条意图识别")
+        self.assertEqual(result["results"][0]["cognitive_asset"], "一条认知资产")
+
+    def test_search_page_renders_asset_card_summary(self) -> None:
+        config = Config(
+            host="127.0.0.1",
+            port=0,
+            tables=["cards", "raw"],
+            vector_limit=10,
+            per_page=20,
+            min_score=0.1,
+        )
+        server = build_server(config)
+        try:
+            with mock.patch("moreway_search_service.http.search_keep_cards") as search_mock:
+                search_mock.return_value = {
+                    "query": "alpha",
+                    "tables": ["cards", "raw"],
+                    "vector_limit": 10,
+                    "per_page": 20,
+                    "page": 1,
+                    "total_pages": 1,
+                    "total_results": 1,
+                    "min_score": 0.1,
+                    "required_tags": [],
+                    "vector_hit_count": 1,
+                    "filtered_hit_count": 1,
+                    "available_tags": [],
+                    "results": [
+                        {
+                            "id": "asset-1",
+                            "title": "Alpha",
+                            "note_title": "Alpha",
+                            "path_in_snapshot": "Alpha.json",
+                            "snippet": "原始摘录",
+                            "rerank_score": 0.9,
+                            "distance": 0.1,
+                            "source_table": "cards",
+                            "doc_kind": "asset_card",
+                            "source_type": "google_keep",
+                            "card_schema": "deep_asset_card_v1",
+                            "created_at": "2026-01-01",
+                            "tags": ["china"],
+                            "category_path": "notes/google-keep",
+                            "priority": "medium",
+                            "keep_md_fid": "NBSS:0xDDD",
+                            "md_url": "http://localhost:8080/nbss/0xDDD",
+                            "keep_json_fid": "NBSS:0xAAA",
+                            "core_view": "一条核心观点",
+                            "intent": "一条意图识别",
+                            "cognitive_asset": "一条认知资产",
+                        }
+                    ],
+                }
+                import threading
+                import urllib.request
+
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                with urllib.request.urlopen(
+                    f"http://{server.server_address[0]}:{server.server_address[1]}/search?q=alpha"
+                ) as response:
+                    body = response.read().decode("utf-8")
+            self.assertIn("资产卡", body)
+            self.assertIn("核心观点", body)
+            self.assertIn("意图识别", body)
+            self.assertIn("认知资产", body)
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_http_search_api_returns_json(self) -> None:
         config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4)

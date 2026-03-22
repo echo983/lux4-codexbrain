@@ -161,6 +161,9 @@ def build_check_catalog() -> dict[str, CheckResult]:
     ok, detail = env_present("GOOGLE_MAPS_API_KEY")
     add("env:google_maps_api_key", ok, detail)
 
+    ok, detail = env_present("OPENAI_API_KEY")
+    add("env:openai_api_key", ok, detail)
+
     ok, detail = env_present("LUX4_CF_ACCOUNT_ID")
     add("env:queue_account_id", ok, detail)
     ok, detail = env_present("LUX4_CF_QUEUE_ID")
@@ -236,6 +239,8 @@ CAPABILITIES: tuple[CapabilitySpec, ...] = (
     CapabilitySpec("cloudflare_bge_m3_embed", "cloudflare_bge_m3_embed", "primitive", "ai", "scripts/cloudflare_bge_m3_embed.py", ("repo_root", "exe:python3", "env:cloudflare_ai")),
     CapabilitySpec("cloudflare_bge_reranker_base", "cloudflare_bge_reranker_base", "primitive", "ai", "scripts/cloudflare_bge_reranker_base.py", ("repo_root", "exe:python3", "env:cloudflare_ai")),
     CapabilitySpec("cloudflare_qwen3_chat", "cloudflare_qwen3_chat", "primitive", "ai", "scripts/cloudflare_qwen3_chat.py", ("repo_root", "exe:python3", "env:cloudflare_ai")),
+    CapabilitySpec("openai_image_generate", "openai_image_generate", "primitive", "ai", "scripts/openai_image_generate.py", ("repo_root", "exe:python3", "env:openai_api_key")),
+    CapabilitySpec("openai_planet_texture_experiment", "openai_planet_texture_experiment", "primitive", "ai", "scripts/openai_planet_texture_experiment.py", ("repo_root", "exe:python3", "env:openai_api_key")),
     CapabilitySpec("lancedb_upsert", "lancedb_upsert", "primitive", "vector", "scripts/lancedb_upsert.py", ("repo_root", "exe:python3", "svc:lancedb")),
     CapabilitySpec("lancedb_search", "lancedb_search", "primitive", "vector", "scripts/lancedb_search.py", ("repo_root", "exe:python3", "svc:lancedb")),
     CapabilitySpec("lancedb_rerank_search", "lancedb_rerank_search", "primitive", "vector", "scripts/lancedb_rerank_search.py", ("repo_root", "exe:python3", "svc:lancedb", "env:cloudflare_ai")),

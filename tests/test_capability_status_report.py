@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.capability_status_report import (
+    CAPABILITIES,
     CapabilitySpec,
     CheckResult,
     build_report,
@@ -158,6 +159,28 @@ class CapabilityStatusReportTests(unittest.TestCase):
                 ok, detail = check_executable("yt-dlp")
             self.assertTrue(ok)
             self.assertEqual(detail, str(binary))
+
+    def test_openai_capabilities_registered(self) -> None:
+        keys = {spec.key for spec in CAPABILITIES}
+        self.assertIn("openai_image_generate", keys)
+        self.assertIn("openai_planet_texture_experiment", keys)
+
+    def test_openai_capability_requires_openai_key(self) -> None:
+        spec = CapabilitySpec(
+            key="openai_image_generate",
+            name="openai_image_generate",
+            kind="primitive",
+            category="ai",
+            path="scripts/capability_status_report.py",
+            required_checks=("env:openai_api_key",),
+        )
+        result = evaluate_capability(
+            spec,
+            {
+                "env:openai_api_key": CheckResult(False, "missing any of: OPENAI_API_KEY"),
+            },
+        )
+        self.assertEqual(result["status"], "unavailable")
 
 
 if __name__ == "__main__":

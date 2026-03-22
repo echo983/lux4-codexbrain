@@ -13,6 +13,9 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 sceneRoot.appendChild(renderer.domElement);
 
+let planetRadius = 10.0;
+let pointRadius = 10.08;
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050b10);
 
@@ -32,7 +35,7 @@ dirLight.position.set(18, 12, 14);
 scene.add(dirLight);
 
 const planet = new THREE.Mesh(
-  new THREE.SphereGeometry(10, 96, 96),
+  new THREE.SphereGeometry(1, 96, 96),
   new THREE.MeshStandardMaterial({
     color: 0x17455e,
     emissive: 0x0d2230,
@@ -43,7 +46,7 @@ const planet = new THREE.Mesh(
 scene.add(planet);
 
 const atmosphere = new THREE.Mesh(
-  new THREE.SphereGeometry(10.4, 64, 64),
+  new THREE.SphereGeometry(1, 64, 64),
   new THREE.MeshBasicMaterial({
     color: 0x4fbfff,
     transparent: true,
@@ -52,6 +55,34 @@ const atmosphere = new THREE.Mesh(
   }),
 );
 scene.add(atmosphere);
+
+function updatePlanetScale() {
+  planet.scale.setScalar(planetRadius);
+  atmosphere.scale.setScalar(planetRadius + 0.45);
+}
+
+function deriveDisplayRadii(bounds) {
+  const [minX, minY, minZ] = bounds.min;
+  const [maxX, maxY, maxZ] = bounds.max;
+  const corners = [
+    [minX, minY, minZ],
+    [minX, minY, maxZ],
+    [minX, maxY, minZ],
+    [minX, maxY, maxZ],
+    [maxX, minY, minZ],
+    [maxX, minY, maxZ],
+    [maxX, maxY, minZ],
+    [maxX, maxY, maxZ],
+  ];
+  let maxRadius = 0;
+  for (const [x, y, z] of corners) {
+    const radius = Math.sqrt(x * x + y * y + z * z);
+    if (radius > maxRadius) maxRadius = radius;
+  }
+  pointRadius = maxRadius;
+  planetRadius = Math.max(0.1, maxRadius - 0.08);
+  updatePlanetScale();
+}
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -145,7 +176,9 @@ function buildChunkPoints(rows) {
   const color = new THREE.Color();
 
   for (const row of rows) {
-    positions.push(row.surface_x, row.surface_y, row.surface_z);
+    const direction = new THREE.Vector3(row.surface_x, row.surface_y, row.surface_z).normalize();
+    const displayed = direction.multiplyScalar(pointRadius);
+    positions.push(displayed.x, displayed.y, displayed.z);
     if (row.doc_kind === 'asset_card') {
       color.setRGB(0.54, 0.86, 1.0);
     } else {
@@ -192,6 +225,7 @@ async function bootstrap() {
   try {
     const latest = await loadJson(`${DATASET_BASE}/latest.json`);
     manifest = await loadJson(`${DATASET_BASE}/${latest.manifest_path}`);
+    deriveDisplayRadii(manifest.bounds);
     await ensureVisibleChunks();
     setSelection(null);
   } catch (error) {

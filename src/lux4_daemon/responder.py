@@ -5,7 +5,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any
 
-from .codex_mcp import CodexExecClient, CodexResumeError
+from .codex_mcp import CodexExecClient, CodexExecError, CodexResumeError
 from .config import Config
 from .models import ConversationSession, IncomingMessage, ReplyMessage
 from .session_store import SessionStore
@@ -22,6 +22,8 @@ class ResponderResult:
 
 
 class CodexResponder:
+    DEFAULT_CONSCIOUSNESS_ENTRY = "没有内容"
+
     def __init__(
         self,
         store: SessionStore,
@@ -36,7 +38,7 @@ class CodexResponder:
         self._client.close()
 
     def build_reply(self, message: IncomingMessage, session: ConversationSession) -> ResponderResult:
-        prompt = self._build_prompt(message)
+        prompt = self._build_prompt(message, session)
         context = {
             "LUX4_AGENT_SESSION_KEY": session.session_key,
             "LUX4_AGENT_SOURCE": message.source,
@@ -86,6 +88,7 @@ class CodexResponder:
             )
         final_session_id = self._run_post_reply_memory_phase(
             message=message,
+            session=session,
             context=context,
             session_id=turn.session_id,
         )
@@ -150,6 +153,7 @@ class CodexResponder:
         self,
         *,
         message: IncomingMessage,
+        session: ConversationSession,
         context: dict[str, str],
         session_id: str,
     ) -> str:
@@ -162,8 +166,19 @@ class CodexResponder:
                 context=context,
                 on_event=self._build_event_logger(message),
             )
+            entry_text = turn.reply_text.strip() or self.DEFAULT_CONSCIOUSNESS_ENTRY
+            self._store.append_consciousness_stream_entry(
+                session_key=session.session_key,
+                trigger_message_id=message.message_id,
+                text=entry_text,
+            )
             return turn.session_id
-        except CodexResumeError as exc:
+        except CodexExecError as exc:
+            self._store.append_consciousness_stream_entry(
+                session_key=session.session_key,
+                trigger_message_id=message.message_id,
+                text=self.DEFAULT_CONSCIOUSNESS_ENTRY,
+            )
             LOGGER.warning(
                 "post-reply memory phase failed; keeping prior session id",
                 extra={"message_id": message.message_id, "session_id": session_id, "detail": str(exc)},
@@ -190,26 +205,41 @@ class CodexResponder:
 
         return on_event
 
-    def _build_prompt(self, message: IncomingMessage) -> str:
+    def _build_prompt(self, message: IncomingMessage, session: ConversationSession) -> str:
         local_timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
-        return "\n".join([
+        lines = [
             f"Local timestamp: {local_timestamp}",
             f"Room ID: {message.room_id}",
             f"User ID: {message.sender_user_id}",
             f"Username: {message.sender_username}",
+        ]
+        recent_entries = self._store.get_recent_consciousness_stream_entries(session.session_key, limit=2)
+        if recent_entries:
+            lines.extend([
+                "Recent consciousness stream records:",
+                *[
+                    f"- [{entry.created_at}] {entry.text}"
+                    for entry in recent_entries
+                ],
+            ])
+        lines.extend([
             "Latest user message:",
             message.text,
         ])
+        return "\n".join(lines)
 
     def _build_memory_followup_prompt(self, message: IncomingMessage) -> str:
         return "\n".join([
-            "System post-reply command. This is not user speech.",
+            "System consciousness-stream command. This is not user speech.",
             "The user-facing reply phase is complete.",
             "Do not send any user-facing message in this phase.",
-            "Evaluate whether the just-finished turn contains durable memory worth writing to long-term memory.",
-            "If durable memory is justified, write it now.",
-            "If no durable memory is justified, do nothing.",
-            "Keep the final output empty.",
+            "Write exactly one internal consciousness-stream record for the just-finished turn.",
+            "This record is mandatory. You must always produce one record.",
+            "Summarize the turn as a short, concrete stream-of-consciousness internal note that may help the next turn.",
+            "If there is no meaningful internal note, output exactly: 没有内容",
+            "Do not output JSON.",
+            "Do not output explanations, headings, or multiple items.",
+            "Output only the single record text.",
             f"Latest user message: {message.text}",
             f"User ID: {message.sender_user_id}",
             f"Username: {message.sender_username}",

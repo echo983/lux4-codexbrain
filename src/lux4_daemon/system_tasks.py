@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .codex_mcp import CodexExecClient, CodexExecError
+from .codex_mcp import CodexExecClient, CodexExecError, CodexResumeError
 from .models import ConversationSession, SystemTaskRun
 from .session_store import SessionStore
 
@@ -165,34 +165,35 @@ class SystemTaskRunner:
     ) -> SystemTaskRun:
         started_at = datetime.now(UTC)
         status = "succeeded"
-        previous_codex_session_id = session.active_codex_session_id
-        codex_session_id = session.active_codex_session_id
+        latest_session = self._store.get_session(session.session_key) or session
+        latest_task_session = self._store.get_system_task_session(latest_session.session_key, task_type)
+        previous_codex_session_id = latest_task_session.codex_session_id if latest_task_session is not None else None
+        codex_session_id = previous_codex_session_id
         error_detail = ""
         summary = ""
         log_path: str | None = None
-        context = self._build_context(session)
+        context = self._build_context(latest_session)
 
         try:
-            turn = self._client.run_turn(
-                prompt,
-                session_id=session.active_codex_session_id,
-                debug_label=f"{task_type}-{session.last_message_id}",
+            turn = self._run_task_turn(
+                task_type=task_type,
+                session=latest_session,
+                prompt=prompt,
                 context=context,
-                developer_instructions=self._developer_instructions,
             )
             codex_session_id = turn.session_id
             summary = turn.reply_text.strip()
-            self._store.set_active_codex_session(session.session_key, turn.session_id)
+            self._store.set_system_task_codex_session(latest_session.session_key, task_type, turn.session_id)
         except CodexExecError as exc:
             status = "failed"
             error_detail = str(exc)
             summary = ""
-            LOGGER.exception("system task failed", extra={"task_type": task_type, "session_key": session.session_key})
+            LOGGER.exception("system task failed", extra={"task_type": task_type, "session_key": latest_session.session_key})
 
         completed_at = datetime.now(UTC)
         log_path = self._write_log(
             task_type=task_type,
-            session=session,
+            session=latest_session,
             window_started_at=window_started_at,
             window_ended_at=window_ended_at,
             started_at=started_at,
@@ -217,6 +218,41 @@ class SystemTaskRunner:
             log_path=log_path,
             summary=summary,
             error_detail=error_detail,
+        )
+
+    def _run_task_turn(
+        self,
+        *,
+        task_type: str,
+        session: ConversationSession,
+        prompt: str,
+        context: dict[str, str],
+    ):
+        task_session = self._store.get_system_task_session(session.session_key, task_type)
+        current_session_id = task_session.codex_session_id if task_session is not None else None
+        debug_label = f"{task_type}-{session.last_message_id}"
+        if current_session_id:
+            try:
+                return self._client.run_turn(
+                    prompt,
+                    session_id=current_session_id,
+                    debug_label=debug_label,
+                    context=context,
+                    developer_instructions=self._developer_instructions,
+                )
+            except CodexResumeError:
+                self._store.clear_system_task_codex_session(session.session_key, task_type)
+                return self._client.run_turn(
+                    prompt,
+                    debug_label=debug_label,
+                    context=context,
+                    developer_instructions=self._developer_instructions,
+                )
+        return self._client.run_turn(
+            prompt,
+            debug_label=debug_label,
+            context=context,
+            developer_instructions=self._developer_instructions,
         )
 
     def _build_context(self, session: ConversationSession) -> dict[str, str]:

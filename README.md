@@ -102,7 +102,7 @@ PYTHONPATH=src python3 -m lux4_daemon
 | `LUX4_CF_API_TOKEN` | 无 | Cloudflare API Token，需有队列写权限 |
 | `LUX4_CODEX_BINARY` | `codex` | Codex CLI 可执行文件路径 |
 | `LUX4_CODEX_MODEL` | 空 | 可选，显式指定 Codex model |
-| `LUX4_CODEX_TIMEOUT_SECONDS` | `240` | 单次 Codex 调用超时 |
+| `LUX4_CODEX_TIMEOUT_SECONDS` | `3600` | 单次 Codex 调用超时 |
 | `LUX4_DEBUG_SESSIONS` | `0` | 打开后输出会话续接调试日志 |
 | `CODEX_API_KEY` | 无 | Codex API key，会透传给 `codex mcp-server` |
 | `LUX4_REQUEST_TIMEOUT_SECONDS` | `10` | reply 出站 HTTP 超时秒数 |

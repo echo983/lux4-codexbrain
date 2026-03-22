@@ -50,6 +50,15 @@ class OutboxMessage:
 
 
 @dataclass(frozen=True)
+class ConsciousnessStreamEntry:
+    entry_id: str
+    session_key: str
+    trigger_message_id: str
+    text: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class SystemTaskRun:
     task_run_id: str
     task_type: str
@@ -71,6 +80,16 @@ class SystemTaskLock:
     owner_id: str
     acquired_at: str
     expires_at: str
+
+
+@dataclass(frozen=True)
+class SystemTaskSession:
+    session_key: str
+    task_type: str
+    codex_session_id: str | None
+    status: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)

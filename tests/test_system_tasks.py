@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from lux4_daemon.codex_mcp import CodexExecError, CodexTurnResult
+from lux4_daemon.codex_mcp import CodexExecError, CodexResumeError, CodexTurnResult
 from lux4_daemon.session_store import SessionStore
 from lux4_daemon.system_tasks import SystemTaskRunner
 
@@ -71,6 +71,21 @@ class SessionStoreRecentActivityTests(unittest.TestCase):
             )
             self.assertTrue(reacquired)
 
+    def test_system_task_sessions_are_isolated_by_task_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+
+            first = store.set_system_task_codex_session(session.session_key, "memory_extraction", "thread-a")
+            second = store.set_system_task_codex_session(session.session_key, "memory_consolidation", "thread-b")
+
+            self.assertEqual(first.codex_session_id, "thread-a")
+            self.assertEqual(second.codex_session_id, "thread-b")
+            self.assertEqual(store.get_system_task_session(session.session_key, "memory_extraction").codex_session_id, "thread-a")
+            self.assertEqual(store.get_system_task_session(session.session_key, "memory_consolidation").codex_session_id, "thread-b")
+            self.assertIsNone(store.get_system_task_session(session.session_key, "memory_insight_injection"))
+
     def test_recent_messages_filters_by_time_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
@@ -128,7 +143,7 @@ class SystemTaskRunnerTests(unittest.TestCase):
             self.assertIn("Recent conversation transcript:", prompt)
             self.assertIn("incoming msg-1: hello", prompt)
             self.assertIn("reply reply::msg-1: I know your preferred name is Edwin.", prompt)
-            self.assertEqual(client.run_turn.call_args.kwargs["session_id"], session.active_codex_session_id)
+            self.assertNotIn("session_id", client.run_turn.call_args.kwargs)
             self.assertEqual(client.run_turn.call_args.kwargs["developer_instructions"], "SYSTEM TASK ONLY")
             self.assertTrue(Path(result.runs[0].log_path).exists())
             log_text = Path(result.runs[0].log_path).read_text(encoding="utf-8")
@@ -201,6 +216,8 @@ class SystemTaskRunnerTests(unittest.TestCase):
             self.assertIn("The user has stable biographical memory", injection_prompt)
             self.assertEqual(client.run_turn.call_args_list[0].kwargs["developer_instructions"], "SYSTEM TASK ONLY")
             self.assertEqual(client.run_turn.call_args_list[1].kwargs["developer_instructions"], "SYSTEM TASK ONLY")
+            self.assertNotIn("session_id", client.run_turn.call_args_list[0].kwargs)
+            self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
 
     def test_failed_memory_extraction_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -215,6 +232,117 @@ class SystemTaskRunnerTests(unittest.TestCase):
             self.assertFalse(result.skipped)
             self.assertEqual(result.runs[0].status, "failed")
             self.assertIn("boom", result.runs[0].error_detail)
+
+    def test_memory_extraction_retries_after_resume_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+            store.set_system_task_codex_session(session.session_key, "memory_extraction", "stale-thread")
+            client = mock.Mock()
+            client.run_turn.side_effect = [
+                CodexResumeError("Session not found for thread_id: stale-thread"),
+                CodexTurnResult(session_id="fresh-thread", reply_text="## Actions\nstored one fact"),
+            ]
+            runner = SystemTaskRunner(store, client, log_dir=str(Path(tmpdir) / "logs"))
+
+            result = runner.run_memory_extraction(window_minutes=10)
+
+            self.assertFalse(result.skipped)
+            self.assertEqual(result.runs[0].status, "succeeded")
+            self.assertEqual(client.run_turn.call_count, 2)
+            self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "stale-thread")
+            self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
+            refreshed = store.get_system_task_session(session.session_key, "memory_extraction")
+            assert refreshed is not None
+            self.assertEqual(refreshed.codex_session_id, "fresh-thread")
+
+    def test_memory_consolidation_retries_after_resume_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+            store.set_system_task_codex_session(session.session_key, "memory_consolidation", "stale-thread")
+            now = datetime.now(UTC)
+            store.record_system_task_run(
+                task_type="memory_extraction",
+                session_key=session.session_key,
+                window_started_at=(now - timedelta(minutes=10)).isoformat(),
+                window_ended_at=now.isoformat(),
+                started_at=now.isoformat(),
+                completed_at=now.isoformat(),
+                status="succeeded",
+                codex_session_id="stale-thread",
+                log_path=str(Path(tmpdir) / "logs" / "extract.log"),
+                summary="stored one fact",
+            )
+            client = mock.Mock()
+            client.run_turn.side_effect = [
+                CodexResumeError("Session not found for thread_id: stale-thread"),
+                CodexTurnResult(
+                    session_id="fresh-thread",
+                    reply_text="## Actions\nconsolidated\n\n## Insight For Session\nKeep answers direct.",
+                ),
+                CodexTurnResult(session_id="fresh-thread", reply_text=""),
+            ]
+            runner = SystemTaskRunner(store, client, log_dir=str(Path(tmpdir) / "logs"))
+
+            result = runner.run_memory_consolidation(window_hours=4)
+
+            self.assertFalse(result.skipped)
+            self.assertEqual(len(result.runs), 2)
+            self.assertEqual(result.runs[0].status, "succeeded")
+            self.assertEqual(client.run_turn.call_count, 3)
+            self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "stale-thread")
+            self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
+            self.assertNotIn("session_id", client.run_turn.call_args_list[2].kwargs)
+            refreshed = store.get_system_task_session(session.session_key, "memory_consolidation")
+            assert refreshed is not None
+            self.assertEqual(refreshed.codex_session_id, "fresh-thread")
+
+    def test_memory_consolidation_does_not_reuse_memory_extraction_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+            store.set_system_task_codex_session(session.session_key, "memory_extraction", "extract-thread")
+            now = datetime.now(UTC)
+            store.record_system_task_run(
+                task_type="memory_extraction",
+                session_key=session.session_key,
+                window_started_at=(now - timedelta(minutes=10)).isoformat(),
+                window_ended_at=now.isoformat(),
+                started_at=now.isoformat(),
+                completed_at=now.isoformat(),
+                status="succeeded",
+                codex_session_id="extract-thread",
+                log_path=str(Path(tmpdir) / "logs" / "extract.log"),
+                summary="stored one fact",
+            )
+            client = mock.Mock()
+            client.run_turn.side_effect = [
+                CodexTurnResult(
+                    session_id="consolidation-thread",
+                    reply_text="## Actions\nconsolidated\n\n## Insight For Session\nKeep answers direct.",
+                ),
+                CodexTurnResult(session_id="insight-thread", reply_text=""),
+            ]
+            runner = SystemTaskRunner(store, client, log_dir=str(Path(tmpdir) / "logs"))
+
+            result = runner.run_memory_consolidation(window_hours=4)
+
+            self.assertFalse(result.skipped)
+            self.assertNotIn("session_id", client.run_turn.call_args_list[0].kwargs)
+            self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
+            extract_session = store.get_system_task_session(session.session_key, "memory_extraction")
+            consolidation_session = store.get_system_task_session(session.session_key, "memory_consolidation")
+            injection_session = store.get_system_task_session(session.session_key, "memory_insight_injection")
+            assert extract_session is not None
+            assert consolidation_session is not None
+            assert injection_session is not None
+            self.assertEqual(extract_session.codex_session_id, "extract-thread")
+            self.assertEqual(consolidation_session.codex_session_id, "consolidation-thread")
+            self.assertEqual(injection_session.codex_session_id, "insight-thread")
 
     def test_memory_extraction_skips_when_same_task_is_already_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

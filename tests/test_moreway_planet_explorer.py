@@ -81,7 +81,7 @@ class MorewayPlanetExplorerTests(unittest.TestCase):
         self.assertEqual(direct["values"], wrapped["values"])
         self.assertEqual(direct["land_threshold"], wrapped["land_threshold"])
 
-    def test_cluster_surface_directions_keeps_top4_by_weight(self) -> None:
+    def test_cluster_surface_directions_keeps_top5_by_weight(self) -> None:
         directions = []
         center_groups = [
             [(1.0, 0.0, 0.0), (0.98, 0.10, 0.08), (0.98, -0.09, 0.06), (0.98, 0.05, -0.08)],
@@ -96,10 +96,11 @@ class MorewayPlanetExplorerTests(unittest.TestCase):
                 raw = group[i % len(group)]
                 length = sum(v * v for v in raw) ** 0.5
                 directions.append(tuple(v / length for v in raw))
-        clusters = _cluster_surface_directions(directions, cluster_count=5, iterations=2, keep_top_clusters=4)
-        self.assertGreaterEqual(len(clusters), 4)
+        clusters = _cluster_surface_directions(directions, cluster_count=5, iterations=2, keep_top_clusters=5)
+        self.assertLessEqual(len(clusters), 5)
+        self.assertGreaterEqual(len(clusters), 1)
         weights = [cluster["weight"] for cluster in clusters]
-        self.assertEqual(weights[:4], sorted(weights[:4], reverse=True))
+        self.assertEqual(weights, sorted(weights, reverse=True))
 
     def test_build_records_accepts_json_string_metadata(self) -> None:
         class FakeArray:

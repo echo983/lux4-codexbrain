@@ -11,6 +11,7 @@ const sceneRoot = document.getElementById('scene-root');
 const overlayLayerEl = document.getElementById('overlay-layer');
 const focusRegionBoxEl = document.getElementById('focus-region-box');
 const focusRegionToggleEl = document.getElementById('focus-region-toggle');
+const planetTextureModeEl = document.getElementById('planet-texture-mode');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -210,6 +211,233 @@ function buildPlanetTexture(surfaceMap) {
   return texture;
 }
 
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`failed to load image: ${url}`));
+    img.src = url;
+  });
+}
+
+function sampleImageData(imageData, width, height, u, v) {
+  const x = ((u % 1) + 1) % 1;
+  const y = ((v % 1) + 1) % 1;
+  const ix = Math.min(width - 1, Math.floor(x * width));
+  const iy = Math.min(height - 1, Math.floor(y * height));
+  const index = (iy * width + ix) * 4;
+  return [
+    imageData[index],
+    imageData[index + 1],
+    imageData[index + 2],
+  ];
+}
+
+function sampleSurfaceValueBilinear(surfaceMap, u, v) {
+  const width = surfaceMap.lon_steps;
+  const height = surfaceMap.lat_steps;
+  const x = ((u % 1) + 1) % 1 * width;
+  const y = Math.max(0, Math.min(height - 1, v * (height - 1)));
+
+  const x0 = Math.floor(x) % width;
+  const x1 = (x0 + 1) % width;
+  const y0 = Math.floor(y);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const tx = x - Math.floor(x);
+  const ty = y - y0;
+
+  const i00 = y0 * width + x0;
+  const i10 = y0 * width + x1;
+  const i01 = y1 * width + x0;
+  const i11 = y1 * width + x1;
+
+  const v00 = surfaceMap.values[i00];
+  const v10 = surfaceMap.values[i10];
+  const v01 = surfaceMap.values[i01];
+  const v11 = surfaceMap.values[i11];
+
+  const top = v00 + (v10 - v00) * tx;
+  const bottom = v01 + (v11 - v01) * tx;
+  return top + (bottom - top) * ty;
+}
+
+function blendRgb(a, b, t) {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * t),
+    Math.round(a[1] + (b[1] - a[1]) * t),
+    Math.round(a[2] + (b[2] - a[2]) * t),
+  ];
+}
+
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / Math.max(edge1 - edge0, 1e-6)));
+  return t * t * (3 - 2 * t);
+}
+
+async function buildPlanetMaterialTexture(surfaceMap) {
+  const materials = {
+    deep_ocean: '/var/openai_image_experiments/materials/deep_ocean.png',
+    shallow_ocean: '/var/openai_image_experiments/materials/shallow_ocean.png',
+    coast: '/var/openai_image_experiments/materials/coast.png',
+    lowland: '/var/openai_image_experiments/materials/lowland.png',
+    upland: '/var/openai_image_experiments/materials/upland.png',
+    mountain_snow: '/var/openai_image_experiments/materials/mountain_snow.png',
+    north_pole: '/var/openai_image_experiments/materials/north_pole.png',
+    south_pole: '/var/openai_image_experiments/materials/south_pole.png',
+  };
+
+  const loaded = {};
+  for (const [key, url] of Object.entries(materials)) {
+    const img = await loadImage(url);
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    loaded[key] = {
+      width: img.width,
+      height: img.height,
+      data: ctx.getImageData(0, 0, img.width, img.height).data,
+    };
+  }
+
+  const scale = 16;
+  const width = surfaceMap.lon_steps * scale;
+  const height = surfaceMap.lat_steps * scale;
+  const threshold = surfaceMap.land_threshold;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(width, height);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const su = x / width;
+      const sv = y / height;
+      const value = sampleSurfaceValueBilinear(surfaceMap, su, sv);
+      const latitude = Math.abs(sv * 2 - 1);
+      const polarBlend = smoothstep(0.72, 0.96, latitude);
+      const polarCapBlend = smoothstep(0.84, 1.0, latitude);
+      const isNorth = sv < 0.5;
+      const polarExtent = 0.28;
+      const polarRadius = isNorth
+        ? Math.min(1, sv / polarExtent)
+        : Math.min(1, (1 - sv) / polarExtent);
+      const polarTheta = su * Math.PI * 2;
+      const polarU = 0.5 + Math.cos(polarTheta) * polarRadius * 0.5;
+      const polarV = 0.5 + Math.sin(polarTheta) * polarRadius * 0.5;
+      const polarTexture = isNorth ? loaded.north_pole : loaded.south_pole;
+      const poleRgb = sampleImageData(polarTexture.data, polarTexture.width, polarTexture.height, polarU, polarV);
+
+      const detailU = su * 6.5 + sv * 0.7;
+      const detailV = sv * 4.5 + su * 0.35;
+      const detailU2 = su * 12.0 - sv * 0.9;
+      const detailV2 = sv * 8.0 + su * 0.6;
+      const broadU = su * 1.6 + sv * 0.15;
+      const broadV = sv * 1.4 + su * 0.08;
+      const broadU2 = su * 2.4 - sv * 0.18;
+      const broadV2 = sv * 2.0 + su * 0.11;
+
+      let rgb;
+      let broadRgb;
+      if (value < threshold) {
+        const seaLevel = value / Math.max(threshold, 1);
+        const oceanBase = seaLevel < 0.58
+          ? sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, detailU, detailV)
+          : blendRgb(
+            sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, detailU, detailV),
+            sampleImageData(loaded.shallow_ocean.data, loaded.shallow_ocean.width, loaded.shallow_ocean.height, detailU2, detailV2),
+            smoothstep(0.58, 1.0, seaLevel),
+          );
+        rgb = oceanBase;
+        broadRgb = seaLevel < 0.58
+          ? sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, broadU, broadV)
+          : blendRgb(
+            sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, broadU, broadV),
+            sampleImageData(loaded.shallow_ocean.data, loaded.shallow_ocean.width, loaded.shallow_ocean.height, broadU2, broadV2),
+            smoothstep(0.58, 1.0, seaLevel),
+          );
+        if (polarBlend > 0) {
+          rgb = blendRgb(rgb, broadRgb, polarBlend * 0.9);
+        }
+        if (polarCapBlend > 0.05) {
+          const icyOcean = blendRgb(broadRgb, [220, 235, 245], polarCapBlend * 0.45);
+          rgb = blendRgb(rgb, icyOcean, polarCapBlend * 0.65);
+        }
+        if (polarBlend > 0.08) {
+          rgb = blendRgb(rgb, poleRgb, polarBlend * 0.82);
+        }
+      } else {
+        const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
+        const compressed = Math.pow(landLevel, 1.55);
+        if (compressed < 0.14) {
+          rgb = sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, detailU, detailV);
+          broadRgb = sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, broadU, broadV);
+        } else if (compressed < 0.48) {
+          rgb = blendRgb(
+            sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, detailU, detailV),
+            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, detailU2, detailV2),
+            smoothstep(0.14, 0.48, compressed),
+          );
+          broadRgb = blendRgb(
+            sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, broadU, broadV),
+            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, broadU2, broadV2),
+            smoothstep(0.14, 0.48, compressed),
+          );
+        } else if (compressed < 0.78) {
+          rgb = blendRgb(
+            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, detailU, detailV),
+            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, detailU2, detailV2),
+            smoothstep(0.48, 0.78, compressed),
+          );
+          broadRgb = blendRgb(
+            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, broadU, broadV),
+            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, broadU2, broadV2),
+            smoothstep(0.48, 0.78, compressed),
+          );
+        } else {
+          rgb = blendRgb(
+            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, detailU, detailV),
+            sampleImageData(loaded.mountain_snow.data, loaded.mountain_snow.width, loaded.mountain_snow.height, detailU2, detailV2),
+            smoothstep(0.78, 1.0, compressed),
+          );
+          broadRgb = blendRgb(
+            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, broadU, broadV),
+            sampleImageData(loaded.mountain_snow.data, loaded.mountain_snow.width, loaded.mountain_snow.height, broadU2, broadV2),
+            smoothstep(0.78, 1.0, compressed),
+          );
+        }
+        if (polarBlend > 0) {
+          rgb = blendRgb(rgb, broadRgb, polarBlend * 0.92);
+        }
+        if (polarCapBlend > 0.05) {
+          const snowCap = blendRgb(broadRgb, [242, 246, 250], polarCapBlend * 0.88);
+          rgb = blendRgb(rgb, snowCap, polarCapBlend * 0.72);
+        }
+        if (polarBlend > 0.08) {
+          const polarLand = blendRgb(poleRgb, broadRgb, 0.22);
+          rgb = blendRgb(rgb, polarLand, polarBlend * 0.88);
+        }
+      }
+
+      const pixel = (y * width + x) * 4;
+      image.data[pixel] = rgb[0];
+      image.data[pixel + 1] = rgb[1];
+      image.data[pixel + 2] = rgb[2];
+      image.data[pixel + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let manifest = null;
@@ -224,6 +452,11 @@ let focusResultsSignature = '';
 const resultContentCache = new Map();
 const BASE_POINT_SIZE = 0.08;
 const starTexture = buildStarTexture();
+const textureLoader = new THREE.TextureLoader();
+const textureCache = new Map();
+let baseSurfaceTexture = null;
+let openaiMaterialTexture = null;
+let currentTextureMode = 'openai_materials';
 const topFocusHighlight = new THREE.Points(
   new THREE.BufferGeometry(),
   new THREE.PointsMaterial({
@@ -435,6 +668,60 @@ async function loadArrow(url) {
   }
   const buffer = await response.arrayBuffer();
   return tableFromIPC(buffer);
+}
+
+async function loadExternalTexture(url) {
+  if (textureCache.has(url)) {
+    return textureCache.get(url);
+  }
+  const texture = await new Promise((resolve, reject) => {
+    textureLoader.load(
+      url,
+      (loaded) => resolve(loaded),
+      undefined,
+      (err) => reject(err || new Error(`failed to load texture: ${url}`)),
+    );
+  });
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  textureCache.set(url, texture);
+  return texture;
+}
+
+async function applyPlanetTextureMode(mode) {
+  currentTextureMode = mode;
+  try {
+    if (mode === 'surface_map') {
+      if (baseSurfaceTexture) {
+        planet.material.map = baseSurfaceTexture;
+        planet.material.needsUpdate = true;
+      }
+      return;
+    }
+    if (mode === 'openai_materials') {
+      if (!manifest?.planet?.surface_map) {
+        throw new Error('surface_map unavailable');
+      }
+      if (!openaiMaterialTexture) {
+        openaiMaterialTexture = await buildPlanetMaterialTexture(manifest.planet.surface_map);
+      }
+      if (currentTextureMode !== mode) return;
+      planet.material.map = openaiMaterialTexture;
+      planet.material.needsUpdate = true;
+      return;
+    }
+  } catch (error) {
+    setStatus(`OpenAI 材质不可用，已降级原始贴图：${error.message}`);
+    currentTextureMode = 'surface_map';
+    if (planetTextureModeEl) {
+      planetTextureModeEl.value = 'surface_map';
+    }
+    if (baseSurfaceTexture) {
+      planet.material.map = baseSurfaceTexture;
+      planet.material.needsUpdate = true;
+    }
+  }
 }
 
 function visibleChunks() {
@@ -753,12 +1040,14 @@ async function bootstrap() {
     manifest = await loadJson(`${DATASET_BASE}/${latest.manifest_path}`);
     deriveDisplayRadii(manifest.bounds);
     if (manifest.planet?.surface_map) {
-      planet.material.map = buildPlanetTexture(manifest.planet.surface_map);
+      baseSurfaceTexture = buildPlanetTexture(manifest.planet.surface_map);
+      planet.material.map = baseSurfaceTexture;
       planet.material.needsUpdate = true;
     }
     await ensureVisibleChunks();
     setSelection(null);
     updateFocusResults();
+    await applyPlanetTextureMode(currentTextureMode);
   } catch (error) {
     setStatus(`加载失败：${error.message}`);
   }
@@ -809,6 +1098,9 @@ bootstrap();
 focusRegionToggleEl.addEventListener('click', () => {
   focusRegionVisible = !focusRegionVisible;
   syncFocusRegionVisibility();
+});
+planetTextureModeEl.addEventListener('change', () => {
+  applyPlanetTextureMode(planetTextureModeEl.value);
 });
 syncFocusRegionVisibility();
 animate();

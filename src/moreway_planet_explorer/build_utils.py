@@ -25,7 +25,7 @@ class SurfaceGenerationConfig:
     smoothing_passes: int = 1
     land_fraction: float = 0.29
     cluster_iterations: int = 6
-    keep_top_clusters: int = 4
+    keep_top_clusters: int = 5
     angular_bins: int = 48
     tail_quantile: float = 0.88
     tail_multiplier: float = 1.08
@@ -309,7 +309,7 @@ def _cluster_surface_directions(
     *,
     cluster_count: int | None = None,
     iterations: int = 6,
-    keep_top_clusters: int = 4,
+    keep_top_clusters: int = 5,
     angular_bins: int = 48,
     tail_quantile: float = 0.88,
     tail_multiplier: float = 1.08,

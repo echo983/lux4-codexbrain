@@ -5,3 +5,6 @@ refs/**/.git
 .env
 refs/docs-cypher/
 refs/nbssUse/
+node_modules/
+dist/
+.vite/

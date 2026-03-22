@@ -58,12 +58,24 @@ html, body, #app {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
   transform: translate(-50%, -50%);
   border-radius: 999px;
-  background: rgba(121, 208, 255, 0.9);
-  box-shadow: 0 0 10px rgba(121, 208, 255, 0.45);
+  background:
+    linear-gradient(90deg,
+      transparent calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% + 0.75px),
+      transparent calc(50% + 0.75px)
+    ),
+    linear-gradient(180deg,
+      transparent calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% + 0.75px),
+      transparent calc(50% + 0.75px)
+    );
+  box-shadow: 0 0 6px rgba(121, 208, 255, 0.18);
 }
 
 .focus-region-box.is-hidden {
@@ -99,7 +111,7 @@ html, body, #app {
   left: 18px;
   bottom: 18px;
   z-index: 10;
-  width: min(420px, calc(100vw - 36px));
+  width: min(280px, calc(100vw - 36px));
   padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -150,6 +162,10 @@ html, body, #app {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
+.result-card.is-asset-card {
+  border-left: 3px solid rgba(255, 216, 118, 0.9);
+}
+
 .result-card.is-selected {
   border-color: rgba(121, 208, 255, 0.48);
   background: rgba(11, 25, 36, 0.82);
@@ -159,19 +175,107 @@ html, body, #app {
   color: var(--accent);
   font-size: 12px;
   margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.result-rank-meta {
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+
+.result-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.result-badge {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(121, 208, 255, 0.22);
+  color: var(--muted);
+}
+
+.result-badge.asset {
+  border-color: rgba(255, 216, 118, 0.48);
+  background: rgba(79, 57, 6, 0.52);
+  color: #fff3bf;
+}
+
+.result-badge.raw {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.result-title-wrap {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .result-title {
-  margin: 0 0 6px;
-  font-size: 16px;
+  margin: 0;
+  font-size: 15px;
   line-height: 1.25;
-  color: var(--text);
 }
 
-.result-meta {
-  margin: 0 0 8px;
-  color: var(--muted);
+.result-title a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.result-title a:hover {
+  color: var(--accent);
+}
+
+.result-links {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.result-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.result-link:hover {
+  text-decoration: underline;
+}
+
+.result-asset-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.result-asset-line {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.result-asset-key {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.result-asset-value {
+  color: var(--text);
   font-size: 12px;
+  line-height: 1.35;
 }
 
 .result-preview {
@@ -197,4 +301,13 @@ html, body, #app {
   white-space: normal;
   box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
   backdrop-filter: blur(8px);
+}
+
+.focus-point-label.is-primary {
+  border-color: rgba(255, 235, 150, 0.55);
+  background: rgba(42, 26, 8, 0.76);
+  color: #fff7d1;
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.22),
+    0 0 16px rgba(255, 214, 102, 0.18);
 }

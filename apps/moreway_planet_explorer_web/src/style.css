@@ -1,6 +1,6 @@
 :root {
   --bg: #07131c;
-  --panel: rgba(8, 21, 31, 0.82);
+  --panel: rgba(8, 21, 31, 0.7);
   --line: rgba(135, 197, 242, 0.22);
   --text: #e8f3ff;
   --muted: #9fb5c8;
@@ -35,18 +35,92 @@ html, body, #app {
   pointer-events: none;
 }
 
+.focus-region-box {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(68vw, 840px);
+  height: min(56vh, 600px);
+  transform: translate(-50%, -50%);
+  z-index: 7;
+  pointer-events: none;
+  border: 1px solid rgba(121, 208, 255, 0.34);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(121, 208, 255, 0.02), rgba(121, 208, 255, 0.01));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 0 0 1px rgba(7, 19, 28, 0.16);
+}
+
+.focus-region-box::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg,
+      transparent calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% + 0.75px),
+      transparent calc(50% + 0.75px)
+    ),
+    linear-gradient(180deg,
+      transparent calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% - 0.75px),
+      rgba(121, 208, 255, 0.52) calc(50% + 0.75px),
+      transparent calc(50% + 0.75px)
+    );
+  box-shadow: 0 0 6px rgba(121, 208, 255, 0.18);
+}
+
+.focus-region-box.is-hidden {
+  display: none;
+}
+
+.topbar {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 12;
+}
+
+.topbar-button {
+  padding: 10px 14px;
+  border: 1px solid rgba(121, 208, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(8, 21, 31, 0.7);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.topbar-button:hover {
+  border-color: rgba(121, 208, 255, 0.46);
+}
+
 .hud {
   position: absolute;
   top: 18px;
   left: 18px;
+  bottom: 18px;
   z-index: 10;
-  width: min(420px, calc(100vw - 36px));
+  width: min(280px, calc(100vw - 36px));
   padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--panel);
   backdrop-filter: blur(10px);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .hud h1 {
@@ -55,54 +129,185 @@ html, body, #app {
 }
 
 .hud p, #status {
-  margin: 0 0 10px;
+  margin: 0;
   color: var(--muted);
 }
 
-.selection {
-  margin-top: 14px;
-  padding-top: 14px;
+.results-summary {
+  padding-top: 12px;
   border-top: 1px solid var(--line);
-}
-
-.selection.empty {
-  color: var(--muted);
-}
-
-.selection h2 {
-  margin: 0 0 8px;
-  font-size: 19px;
-}
-
-.selection .meta {
-  margin: 0 0 8px;
   color: var(--accent);
   font-size: 13px;
 }
 
-.selection .preview {
+.results-list {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.results-empty {
+  color: var(--muted);
+  padding-top: 6px;
+}
+
+.result-card {
+  padding: 12px 12px 11px;
+  border: 1px solid rgba(121, 208, 255, 0.15);
+  border-radius: 14px;
+  background: rgba(6, 14, 21, 0.56);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.result-card.is-asset-card {
+  border-left: 3px solid rgba(255, 216, 118, 0.9);
+}
+
+.result-card.is-selected {
+  border-color: rgba(121, 208, 255, 0.48);
+  background: rgba(11, 25, 36, 0.82);
+}
+
+.result-rank {
+  color: var(--accent);
+  font-size: 12px;
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.result-rank-meta {
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+
+.result-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.result-badge {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(121, 208, 255, 0.22);
+  color: var(--muted);
+}
+
+.result-badge.asset {
+  border-color: rgba(255, 216, 118, 0.48);
+  background: rgba(79, 57, 6, 0.52);
+  color: #fff3bf;
+}
+
+.result-badge.raw {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.result-title-wrap {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.result-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.result-title a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.result-title a:hover {
+  color: var(--accent);
+}
+
+.result-links {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.result-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.result-link:hover {
+  text-decoration: underline;
+}
+
+.result-asset-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.result-asset-line {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.result-asset-key {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.result-asset-value {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.result-preview {
   margin: 0;
   color: var(--text);
-  line-height: 1.45;
+  line-height: 1.4;
+  font-size: 13px;
   white-space: pre-wrap;
 }
 
-.point-label {
+.focus-point-label {
   position: absolute;
-  transform: translate(-50%, -130%);
-  max-width: 240px;
-  padding: 8px 10px;
-  border: 1px solid rgba(121, 208, 255, 0.35);
-  border-radius: 12px;
-  background: rgba(7, 19, 28, 0.9);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  transform: translate(-50%, 28px);
+  max-width: 150px;
+  padding: 3px 8px;
+  border: 1px solid rgba(121, 208, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(7, 19, 28, 0.7);
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: 11px;
+  line-height: 1.1;
+  text-align: center;
   white-space: normal;
-  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(8px);
 }
 
-.point-label.hidden {
-  display: none;
+.focus-point-label.is-primary {
+  border-color: rgba(255, 235, 150, 0.55);
+  background: rgba(42, 26, 8, 0.76);
+  color: #fff7d1;
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.22),
+    0 0 16px rgba(255, 214, 102, 0.18);
 }

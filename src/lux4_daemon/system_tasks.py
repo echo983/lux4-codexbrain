@@ -28,6 +28,7 @@ class SystemTaskRunner:
         self._store = store
         self._client = client
         self._log_dir = Path(log_dir)
+        self._developer_instructions = self._load_system_task_instructions()
 
     def run_memory_extraction(self, *, window_minutes: int = 10) -> SystemTaskBatchResult:
         owner_id = uuid.uuid4().hex
@@ -177,6 +178,7 @@ class SystemTaskRunner:
                 session_id=session.active_codex_session_id,
                 debug_label=f"{task_type}-{session.last_message_id}",
                 context=context,
+                developer_instructions=self._developer_instructions,
             )
             codex_session_id = turn.session_id
             summary = turn.reply_text.strip()
@@ -227,6 +229,12 @@ class SystemTaskRunner:
             "LUX4_AGENT_SENDER_USERNAME": session.sender_username,
             "LUX4_AGENT_TRIGGER_MESSAGE_ID": session.last_message_id,
         }
+
+    def _load_system_task_instructions(self) -> str:
+        path = Path.cwd() / "docs" / "system-task-runtime-developer-instructions.md"
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8").strip()
 
     def _build_batch_result(
         self,

@@ -112,7 +112,8 @@ class SystemTaskRunnerTests(unittest.TestCase):
                 session_id="thread-123",
                 reply_text="## Actions\nstored one fact",
             )
-            runner = SystemTaskRunner(store, client, log_dir=str(Path(tmpdir) / "logs"))
+            with mock.patch.object(SystemTaskRunner, "_load_system_task_instructions", return_value="SYSTEM TASK ONLY"):
+                runner = SystemTaskRunner(store, client, log_dir=str(Path(tmpdir) / "logs"))
 
             result = runner.run_memory_extraction(window_minutes=10)
 
@@ -128,6 +129,7 @@ class SystemTaskRunnerTests(unittest.TestCase):
             self.assertIn("incoming msg-1: hello", prompt)
             self.assertIn("reply reply::msg-1: I know your preferred name is Edwin.", prompt)
             self.assertEqual(client.run_turn.call_args.kwargs["session_id"], session.active_codex_session_id)
+            self.assertEqual(client.run_turn.call_args.kwargs["developer_instructions"], "SYSTEM TASK ONLY")
             self.assertTrue(Path(result.runs[0].log_path).exists())
             log_text = Path(result.runs[0].log_path).read_text(encoding="utf-8")
             self.assertIn("prompt:", log_text)
@@ -181,7 +183,8 @@ class SystemTaskRunnerTests(unittest.TestCase):
                     reply_text="",
                 ),
             ]
-            runner = SystemTaskRunner(store, client, log_dir=str(Path(tmpdir) / "logs"))
+            with mock.patch.object(SystemTaskRunner, "_load_system_task_instructions", return_value="SYSTEM TASK ONLY"):
+                runner = SystemTaskRunner(store, client, log_dir=str(Path(tmpdir) / "logs"))
 
             result = runner.run_memory_consolidation(window_hours=4)
 
@@ -196,6 +199,8 @@ class SystemTaskRunnerTests(unittest.TestCase):
             self.assertIn("Task: memory_consolidation_sleep", consolidation_prompt)
             self.assertIn("Task: memory_insight_injection", injection_prompt)
             self.assertIn("The user has stable biographical memory", injection_prompt)
+            self.assertEqual(client.run_turn.call_args_list[0].kwargs["developer_instructions"], "SYSTEM TASK ONLY")
+            self.assertEqual(client.run_turn.call_args_list[1].kwargs["developer_instructions"], "SYSTEM TASK ONLY")
 
     def test_failed_memory_extraction_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

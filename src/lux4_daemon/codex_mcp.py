@@ -66,6 +66,7 @@ class CodexExecClient:
         debug_label: str | None = None,
         context: dict[str, str] | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        developer_instructions: str | None = None,
     ) -> CodexTurnResult:
         self._validate_required_env()
 
@@ -79,9 +80,11 @@ class CodexExecClient:
             arguments["cwd"] = str(Path.cwd())
             if self._model:
                 arguments["model"] = self._model
-        developer_instructions = self._load_developer_instructions()
-        if developer_instructions:
-            arguments["developer-instructions"] = developer_instructions
+        effective_developer_instructions = developer_instructions
+        if effective_developer_instructions is None:
+            effective_developer_instructions = self._load_developer_instructions()
+        if effective_developer_instructions:
+            arguments["developer-instructions"] = effective_developer_instructions
 
         with self._lock:
             self._write_context_file(context or {})

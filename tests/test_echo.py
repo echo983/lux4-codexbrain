@@ -439,6 +439,28 @@ class CodexExecClientTest(unittest.TestCase):
         self.assertNotIn("sandbox", call_mock.call_args.args[1])
         self.assertIn("lux4-send-message", call_mock.call_args.args[1]["developer-instructions"])
 
+    def test_run_turn_allows_explicit_developer_instructions_override(self) -> None:
+        client = CodexExecClient(Config(
+            database_path="var/test.sqlite3",
+            neo4j_uri="bolt://graph.example:7687",
+            neo4j_username="neo4j-user",
+            neo4j_password="secret-pass",
+        ))
+        fake_response = {
+            "result": {
+                "structuredContent": {
+                    "threadId": "thread-123",
+                    "content": "hello override",
+                }
+            }
+        }
+
+        with mock.patch.object(client, "_call_tool", return_value=(fake_response, ['{"jsonrpc":"2.0"}'])) as call_mock:
+            client.run_turn("reply please", developer_instructions="SYSTEM TASK ONLY")
+
+        arguments = call_mock.call_args.args[1]
+        self.assertEqual(arguments["developer-instructions"], "SYSTEM TASK ONLY")
+
     def test_resume_failure_raises_specific_error(self) -> None:
         client = CodexExecClient(Config(
             neo4j_uri="bolt://graph.example:7687",

@@ -14,6 +14,9 @@ class GoogleKeepNfsDeliveryTests(unittest.TestCase):
         ):
             self.assertEqual(resolve_default_table(""), "google_keep_asset_cards_directmd_eval200")
 
+    def test_resolve_default_table_uses_explicit_table(self) -> None:
+        self.assertEqual(resolve_default_table("custom_table"), "custom_table")
+
     def test_build_delivery_snapshot_builds_manifest_and_site(self) -> None:
         search_result = {
             "results": [

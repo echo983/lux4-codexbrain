@@ -16,6 +16,7 @@ try:
         nbss_put_bytes,
         resolve_nbss_server_endpoint,
     )
+    from scripts.lancedb_local_api import resolve_lancedb_url
     from scripts.lancedb_rerank_search import search_with_rerank
 except ModuleNotFoundError:
     from build_notfinder_snapshot_static_site import (
@@ -23,6 +24,7 @@ except ModuleNotFoundError:
         nbss_put_bytes,
         resolve_nbss_server_endpoint,
     )
+    from lancedb_local_api import resolve_lancedb_url
     from lancedb_rerank_search import search_with_rerank
 
 

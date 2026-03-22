@@ -9,7 +9,7 @@
 3. 生成回复。
 4. 将回复按统一结构推送到上游配置的 reply queue 接口。
 
-当前版本已经接入 `codex exec`，并支持按用户会话续接已有 Codex session。
+当前版本已经接入持久化 `codex mcp-server`，并支持按用户会话续接已有 Codex thread。
 
 此外，仓库现在还提供一组直接调用 Google Maps / Weather API 的原语脚本，给后续 skill 和日常地图问答使用。
 
@@ -23,11 +23,14 @@
 - 已实现消息标准化，兼容参考项目中的 `incoming_message` 结构
 - 已实现异步后台处理
 - 已实现本地 SQLite 会话记录
-- 已实现基于 `codex exec` 的回复生成
-- 已实现本地会话到 Codex session id 的续接
+- 已实现基于 `codex mcp-server` 的回复生成
+- 已实现本地会话到 Codex thread id 的续接
 - 已实现 reply 出站推送
 - reply 出站目标固定为 Cloudflare Queue push API
 - 助手行为由项目根目录 [AGENT.md](/root/lux4-codexbrain/AGENT.md) 约束
+- 已实现运行时硬规则注入：
+  - [lux-runtime-developer-instructions.md](/root/lux4-codexbrain/docs/lux-runtime-developer-instructions.md)
+  - [system-task-runtime-developer-instructions.md](/root/lux4-codexbrain/docs/system-task-runtime-developer-instructions.md)
 - 已实现 2 个 NBSS / PVLog 解析原语：
   - [parse_notfinder_llm_snapshot.py](/root/lux4-codexbrain/scripts/parse_notfinder_llm_snapshot.py)
   - [parse_pvlog_head.py](/root/lux4-codexbrain/scripts/parse_pvlog_head.py)
@@ -37,6 +40,15 @@
   - [google_geocode.py](/root/lux4-codexbrain/scripts/google_geocode.py)
   - [google_compute_routes.py](/root/lux4-codexbrain/scripts/google_compute_routes.py)
   - [google_weather.py](/root/lux4-codexbrain/scripts/google_weather.py)
+- 已实现 Google Keep RAG 骨架：
+  - `Deep Asset Card`
+  - `raw md` 入库
+  - LanceDB 混合检索
+  - `nfs打包交付`
+- 已实现在线 Keep 搜索服务：
+  - [moreway_search_service](/root/lux4-codexbrain/src/moreway_search_service/__main__.py)
+- 已实现能力可用性状态报告：
+  - [capability_status_report.py](/root/lux4-codexbrain/scripts/capability_status_report.py)
 
 ---
 
@@ -92,7 +104,7 @@ PYTHONPATH=src python3 -m lux4_daemon
 | `LUX4_CODEX_MODEL` | 空 | 可选，显式指定 Codex model |
 | `LUX4_CODEX_TIMEOUT_SECONDS` | `240` | 单次 Codex 调用超时 |
 | `LUX4_DEBUG_SESSIONS` | `0` | 打开后输出会话续接调试日志 |
-| `CODEX_API_KEY` | 无 | Codex API key，会透传给 `codex exec` |
+| `CODEX_API_KEY` | 无 | Codex API key，会透传给 `codex mcp-server` |
 | `LUX4_REQUEST_TIMEOUT_SECONDS` | `10` | reply 出站 HTTP 超时秒数 |
 | `GOOGLE_MAPS_API_KEY` | 无 | Google Maps / Routes / Geocoding / Weather API key |
 
@@ -104,6 +116,38 @@ PYTHONPATH=src python3 -m lux4_daemon
 - 如果本机没有可复用的 Codex 登录态，建议显式配置 `CODEX_API_KEY`。
 - `LUX4_DEBUG_SESSIONS=1` 时，会输出本轮使用的 `stored_codex_session_id`、返回的 `returned_codex_session_id`、是否尝试了 `resume`，以及是否发生了重建。
 - 如果要使用 Google 原语脚本，当前项目 `.env` 里还需要配置 `GOOGLE_MAPS_API_KEY`。
+
+---
+
+## 能力状态报告
+
+当前仓库提供统一的原语 / 服务 / skill 可用性状态报告脚本：
+
+- [capability_status_report.py](/root/lux4-codexbrain/scripts/capability_status_report.py)
+
+用途：
+
+- 盘点当前仓库有哪些原语和服务
+- 检查依赖、环境变量、可执行文件、服务可达性、关键 LanceDB 表
+- 生成给智能体和人都能看的状态清单
+
+运行：
+
+```bash
+python3 scripts/capability_status_report.py --output-dir var/capability_status --stdout-format summary
+```
+
+输出：
+
+- JSON 报告：
+  - `var/capability_status/latest.json`
+- Markdown 报告：
+  - `var/capability_status/latest.md`
+
+说明：
+
+- 这是轻量可用性检查，不默认执行会产生额外费用的深度远程探测。
+- 当前会把 `agent_enqueue_message` 在非 agent runtime 环境里标为 `degraded`，这属于正常现象。
 
 ---
 
@@ -408,28 +452,19 @@ var/system_task_logs/
 
 1. daemon 收到入站消息
 2. 用 `source + site_url + room_id + sender_user_id` 定位本地会话
-3. 如果没有现有 Codex session，则执行新的 `codex exec`
-4. 如果已有 Codex session，则执行 `codex exec resume <SESSION_ID>`
-5. 将最新 `thread_id` 回写到本地 SQLite
-6. 将最终回复推送到 Cloudflare Queue
+3. 如果没有现有 Codex thread，则通过持久化 `codex mcp-server` 调用 `codex`
+4. 如果已有 Codex thread，则通过 `codex-reply` 续接
+5. 先执行用户答复阶段
+6. 再执行独立的 post-reply memory phase
+7. 所有用户可见消息通过 `lux4-send-message` 实时写入 outbox
+8. daemon 实时发送 outbox 消息，并将结果推送到 Cloudflare Queue
 
-当前实现里，daemon 调用 Codex 时会显式带上：
+当前实现里：
 
-```bash
---full-auto
-```
-
-这个自动执行参数只用于新的 `codex exec` 会话启动。
-
-对已有会话的续接：
-
-```bash
-codex exec resume <SESSION_ID>
-```
-
-不会再错误附带不兼容参数，否则 `resume` 会失败并触发会话重建。
-
-也就是说，当前 Codex 新会话以 `--full-auto` 启动，但 `resume` 子命令保持最小必要参数。
+- `codex mcp-server` 是唯一运行核心
+- `reply phase` 与 `post-reply memory phase` 已显式分离
+- `resume` / 续接失败时会自动清理旧 thread 并新开一轮
+- 过程消息不会再攒到最后一起发送
 
 本地数据库默认在：
 
@@ -445,7 +480,7 @@ var/lux4_daemon.sqlite3
 - `last_message_id`
 - `last_message_at`
 
-如果 `resume` 失败，daemon 会清掉旧的 Codex session id，并自动新建一轮会话。
+如果 `resume` / `codex-reply` 失败，daemon 会清掉旧的 Codex thread id，并自动新建一轮会话。
 
 如果你想手动清空本地会话历史，重新开始新的 Codex session，而不碰 Neo4j 长期记忆，可以运行：
 
@@ -465,12 +500,21 @@ python3 scripts/reset_local_sessions.py --db-path var/lux4_daemon.sqlite3 --yes
 
 项目根目录的 [AGENT.md](/root/lux4-codexbrain/AGENT.md) 定义了统一的助手行为边界。
 
-核心约束包括：
+当前提示词分层如下：
+
+- 项目长期策略：
+  - [AGENT.md](/root/lux4-codexbrain/AGENT.md)
+- 用户回合运行时硬规则：
+  - [lux-runtime-developer-instructions.md](/root/lux4-codexbrain/docs/lux-runtime-developer-instructions.md)
+- system task 运行时硬规则：
+  - [system-task-runtime-developer-instructions.md](/root/lux4-codexbrain/docs/system-task-runtime-developer-instructions.md)
+
+核心原则包括：
 
 - 角色是 IM 助手，不是 coding agent
-- 只输出给最终用户的正文
+- 用户可见消息必须通过 `lux4-send-message`
 - 默认跟随用户语言
-- 不暴露内部实现、session id、Codex、Cloudflare、数据库和队列细节
+- 不暴露内部实现、thread id、Codex、Cloudflare、数据库和队列细节
 - 不编造已经执行的动作
 
 ---
@@ -535,7 +579,7 @@ curl -sS http://127.0.0.1:18473/healthz
 
 - 上游在收到用户 IM 消息后，将消息转发给本 daemon。
 - daemon 收到后立即返回 `202 Accepted`。
-- 真正的消息处理、Codex 会话续接和 reply 推送在后台线程异步执行。
+- 真正的消息处理、Codex thread 续接和 reply 推送在后台线程异步执行。
 
 这意味着：
 
@@ -829,7 +873,7 @@ Authorization: Bearer <token>
 3. 上游调用 `POST /api/v1/messages/incoming`。
 4. 如果收到 `202 Accepted`，说明 daemon 已接受处理。
 5. daemon 在后台执行回复逻辑。
-6. daemon 用 `codex exec` 或 `codex exec resume` 生成回复。
+6. daemon 用 `codex mcp-server` 的 `codex` / `codex-reply` 生成回复。
 7. daemon 把 `reply_message` 推送到 Cloudflare Queue。
 8. 上游 reply queue 消费者再把消息真正发回 IM 平台。
 
@@ -854,6 +898,47 @@ Authorization: Bearer <token>
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
+
+---
+
+## moreway Search Service
+
+仓库现在还包含一个独立的 Google Keep 在线搜索子项目：
+
+- [moreway_search_service](/root/lux4-codexbrain/src/moreway_search_service/__main__.py)
+
+用途：
+
+- 在线搜索 Keep 资产卡与原始 `md`
+- 支持 mixed search
+- 支持分页
+- 支持标签过滤
+- 资产卡与原始文档可区分展示
+
+启动：
+
+```bash
+cd /root/lux4-codexbrain
+PYTHONPATH=src python3 -m moreway_search_service
+```
+
+默认监听：
+
+- `http://127.0.0.1:18561/`
+
+当前默认搜索表：
+
+- `google_keep_asset_cards_directmd_eval200`
+- `google_keep_raw_md`
+
+可通过环境变量覆盖：
+
+- `MOREWAY_HOST`
+- `MOREWAY_PORT`
+- `MOREWAY_SEARCH_TABLES`
+- `MOREWAY_VECTOR_LIMIT`
+- `MOREWAY_PER_PAGE`
+- `MOREWAY_MIN_SCORE`
 
 ---
 

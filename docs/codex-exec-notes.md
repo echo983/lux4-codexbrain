@@ -1,5 +1,9 @@
 # Codex Exec Notes
 
+> Historical note: `lux4-codexbrain` no longer uses `codex exec` as its runtime core.
+> The current daemon uses persistent `codex mcp-server`.
+> Keep this document only as background material for the earlier implementation stage.
+
 这份备忘整理的是 `codex exec` 非交互模式里，后续接入 `lux4-codexbrain` 最可能直接用到的点。
 
 ## 核心定位

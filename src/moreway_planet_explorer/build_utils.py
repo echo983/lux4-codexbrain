@@ -197,6 +197,141 @@ def _normalize_direction(point: tuple[float, float, float]) -> tuple[float, floa
     return (x / length, y / length, z / length)
 
 
+def _dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _add(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _project_to_local_plane(
+    point: tuple[float, float, float],
+    center: tuple[float, float, float],
+    tangent_x: tuple[float, float, float],
+    tangent_y: tuple[float, float, float],
+) -> tuple[float, float]:
+    return (_dot(point, tangent_x), _dot(point, tangent_y))
+
+
+def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
+    x, y = point
+    inside = False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        intersects = ((yi > y) != (yj > y)) and (
+            x < (xj - xi) * (y - yi) / max((yj - yi), 1e-12) + xi
+        )
+        if intersects:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _cluster_surface_directions(
+    directions: list[tuple[float, float, float]],
+    *,
+    cluster_count: int | None = None,
+    iterations: int = 6,
+) -> list[dict[str, Any]]:
+    if not directions:
+        return []
+    if cluster_count is None:
+        cluster_count = max(6, min(18, round(math.sqrt(len(directions)) / 3)))
+    cluster_count = max(1, min(cluster_count, len(directions)))
+
+    seeds = [directions[0]]
+    while len(seeds) < cluster_count:
+        best_direction = None
+        best_distance = -1.0
+        for direction in directions:
+            nearest = max(_dot(direction, seed) for seed in seeds)
+            distance = 1.0 - nearest
+            if distance > best_distance:
+                best_distance = distance
+                best_direction = direction
+        assert best_direction is not None
+        seeds.append(best_direction)
+
+    centers = seeds[:]
+    assignments = [0 for _ in directions]
+    for _ in range(iterations):
+        groups = [[] for _ in centers]
+        for index, direction in enumerate(directions):
+            best_idx = max(range(len(centers)), key=lambda i: _dot(direction, centers[i]))
+            assignments[index] = best_idx
+            groups[best_idx].append(direction)
+
+        next_centers: list[tuple[float, float, float]] = []
+        for i, group in enumerate(groups):
+            if not group:
+                next_centers.append(centers[i])
+                continue
+            summed = (0.0, 0.0, 0.0)
+            for direction in group:
+                summed = _add(summed, direction)
+            next_centers.append(_normalize_direction(summed))
+        centers = next_centers
+
+    groups = [[] for _ in centers]
+    for direction, assignment in zip(directions, assignments):
+        groups[assignment].append(direction)
+
+    clusters: list[dict[str, Any]] = []
+    total = float(len(directions))
+    north = (0.0, 1.0, 0.0)
+    east = (1.0, 0.0, 0.0)
+    angular_bins = 48
+    for center, group in zip(centers, groups):
+        if len(group) < 3:
+            continue
+        tangent_x = _cross(north, center)
+        if math.sqrt(_dot(tangent_x, tangent_x)) < 1e-6:
+            tangent_x = _cross(east, center)
+        tangent_x = _normalize_direction(tangent_x)
+        tangent_y = _normalize_direction(_cross(center, tangent_x))
+
+        bin_best: dict[int, tuple[float, tuple[float, float]]] = {}
+        for member in group:
+            px, py = _project_to_local_plane(member, center, tangent_x, tangent_y)
+            angle = math.atan2(py, px)
+            radius = math.sqrt(px * px + py * py)
+            if radius <= 1e-6:
+                continue
+            bin_index = int(((angle + math.pi) / (2.0 * math.pi)) * angular_bins) % angular_bins
+            best = bin_best.get(bin_index)
+            if best is None or radius > best[0]:
+                bin_best[bin_index] = (radius, (px, py))
+
+        polygon = [
+            point for _, point in sorted(bin_best.values(), key=lambda item: math.atan2(item[1][1], item[1][0]))
+        ]
+        if len(polygon) < 3:
+            continue
+
+        clusters.append(
+            {
+                "center": center,
+                "weight": len(group) / total,
+                "members": group,
+                "tangent_x": tangent_x,
+                "tangent_y": tangent_y,
+                "polygon": polygon,
+            }
+        )
+    return clusters
+
+
 def build_surface_density_map(
     points: list[tuple[float, float, float]],
     *,
@@ -215,7 +350,10 @@ def build_surface_density_map(
         }
 
     directions = [_normalize_direction(point) for point in points]
+    clusters = _cluster_surface_directions(directions)
     raw_values: list[float] = []
+    point_cutoff = 0.92
+    point_power = 5.0
     for lat_idx in range(lat_steps):
         v = (lat_idx + 0.5) / lat_steps
         theta = v * math.pi
@@ -229,12 +367,30 @@ def build_surface_density_map(
                 cos_theta,
                 math.sin(phi) * sin_theta,
             )
-            density = 0.0
-            for direction in directions:
-                dot = max(-1.0, min(1.0, direction[0] * cell[0] + direction[1] * cell[1] + direction[2] * cell[2]))
-                # Strong local contribution near points, fast decay elsewhere.
-                density += ((dot + 1.0) * 0.5) ** 14
-            raw_values.append(density)
+            land = 0.0
+            for cluster in clusters:
+                local_point = _project_to_local_plane(
+                    cell,
+                    cluster["center"],
+                    cluster["tangent_x"],
+                    cluster["tangent_y"],
+                )
+                if not _point_in_polygon(local_point, cluster["polygon"]):
+                    continue
+
+                edge_growth = 0.0
+                for member in cluster["members"]:
+                    dot = max(-1.0, min(1.0, _dot(member, cell)))
+                    proximity = (dot + 1.0) * 0.5
+                    if proximity <= point_cutoff:
+                        continue
+                    local = (proximity - point_cutoff) / max(1.0 - point_cutoff, 1e-9)
+                    edge_growth += local ** point_power
+
+                candidate = (0.55 + edge_growth ** 0.6) * (0.7 + cluster["weight"] ** 0.55)
+                if candidate > land:
+                    land = candidate
+            raw_values.append(land)
 
     def smooth(values: list[float]) -> list[float]:
         smoothed: list[float] = []
@@ -279,4 +435,5 @@ def build_surface_density_map(
         "values": normalized,
         "land_threshold": land_threshold,
         "land_fraction": land_fraction,
+        "cluster_count": len(clusters),
     }

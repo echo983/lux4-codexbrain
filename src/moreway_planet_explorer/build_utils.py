@@ -187,3 +187,96 @@ def build_octree(
         return node
 
     return walk(records, root_bounds, 0, "root"), chunk_specs
+
+
+def _normalize_direction(point: tuple[float, float, float]) -> tuple[float, float, float]:
+    x, y, z = point
+    length = math.sqrt(x * x + y * y + z * z)
+    if length == 0:
+        return (0.0, 1.0, 0.0)
+    return (x / length, y / length, z / length)
+
+
+def build_surface_density_map(
+    points: list[tuple[float, float, float]],
+    *,
+    lat_steps: int = 72,
+    lon_steps: int = 144,
+    smoothing_passes: int = 1,
+    land_fraction: float = 0.29,
+) -> dict[str, Any]:
+    if not points:
+        values = [0 for _ in range(lat_steps * lon_steps)]
+        return {
+            "lat_steps": lat_steps,
+            "lon_steps": lon_steps,
+            "values": values,
+            "land_threshold": 128,
+        }
+
+    directions = [_normalize_direction(point) for point in points]
+    raw_values: list[float] = []
+    for lat_idx in range(lat_steps):
+        v = (lat_idx + 0.5) / lat_steps
+        theta = v * math.pi
+        sin_theta = math.sin(theta)
+        cos_theta = math.cos(theta)
+        for lon_idx in range(lon_steps):
+            u = (lon_idx + 0.5) / lon_steps
+            phi = u * (2.0 * math.pi)
+            cell = (
+                -math.cos(phi) * sin_theta,
+                cos_theta,
+                math.sin(phi) * sin_theta,
+            )
+            density = 0.0
+            for direction in directions:
+                dot = max(-1.0, min(1.0, direction[0] * cell[0] + direction[1] * cell[1] + direction[2] * cell[2]))
+                # Strong local contribution near points, fast decay elsewhere.
+                density += ((dot + 1.0) * 0.5) ** 14
+            raw_values.append(density)
+
+    def smooth(values: list[float]) -> list[float]:
+        smoothed: list[float] = []
+        for lat_idx in range(lat_steps):
+            for lon_idx in range(lon_steps):
+                total = 0.0
+                weight = 0.0
+                for lat_offset in (-1, 0, 1):
+                    for lon_offset in (-1, 0, 1):
+                        neighbor_lat = min(max(lat_idx + lat_offset, 0), lat_steps - 1)
+                        neighbor_lon = (lon_idx + lon_offset) % lon_steps
+                        idx = neighbor_lat * lon_steps + neighbor_lon
+                        local_weight = 2.0 if lat_offset == 0 and lon_offset == 0 else 1.0
+                        total += values[idx] * local_weight
+                        weight += local_weight
+                smoothed.append(total / weight)
+        return smoothed
+
+    values = raw_values
+    for _ in range(smoothing_passes):
+        values = smooth(values)
+
+    min_value = min(values)
+    max_value = max(values)
+    if max_value <= min_value:
+        normalized = [128 for _ in values]
+    else:
+        normalized = [
+            int(round(((value - min_value) / (max_value - min_value)) * 255.0))
+            for value in values
+        ]
+
+    sorted_values = sorted(normalized)
+    # Earth-like land/ocean split: about 29% land, 71% ocean.
+    land_fraction = min(max(land_fraction, 0.01), 0.99)
+    threshold_index = int(len(sorted_values) * (1.0 - land_fraction))
+    threshold_index = min(max(threshold_index, 0), len(sorted_values) - 1)
+    land_threshold = sorted_values[threshold_index]
+    return {
+        "lat_steps": lat_steps,
+        "lon_steps": lon_steps,
+        "values": normalized,
+        "land_threshold": land_threshold,
+        "land_fraction": land_fraction,
+    }

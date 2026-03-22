@@ -37,7 +37,7 @@ scene.add(dirLight);
 const planet = new THREE.Mesh(
   new THREE.SphereGeometry(1, 96, 96),
   new THREE.MeshStandardMaterial({
-    color: 0x17455e,
+    color: 0xffffff,
     emissive: 0x0d2230,
     roughness: 0.95,
     metalness: 0.05,
@@ -82,6 +82,88 @@ function deriveDisplayRadii(bounds) {
   pointRadius = maxRadius;
   planetRadius = Math.max(0.1, maxRadius - 0.08);
   updatePlanetScale();
+}
+
+function buildPlanetTexture(surfaceMap) {
+  const width = surfaceMap.lon_steps;
+  const height = surfaceMap.lat_steps;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  const image = ctx.createImageData(width, height);
+  const threshold = surfaceMap.land_threshold;
+
+  function smoothstep(edge0, edge1, x) {
+    const t = Math.max(0, Math.min(1, (x - edge0) / Math.max(edge1 - edge0, 1e-6)));
+    return t * t * (3 - 2 * t);
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function mixColor(a, b, t) {
+    return [
+      Math.round(lerp(a[0], b[0], t)),
+      Math.round(lerp(a[1], b[1], t)),
+      Math.round(lerp(a[2], b[2], t)),
+    ];
+  }
+
+  const deepSea = [6, 22, 64];
+  const sea = [18, 66, 128];
+  const shallowSea = [72, 126, 178];
+  const coast = [201, 181, 129];
+  const lowland = [86, 122, 74];
+  const upland = [118, 104, 76];
+  const mountain = [148, 142, 138];
+  const snow = [245, 247, 250];
+
+  for (let lat = 0; lat < height; lat += 1) {
+    for (let lon = 0; lon < width; lon += 1) {
+      const idx = lat * width + lon;
+      const value = surfaceMap.values[idx];
+      const pixel = idx * 4;
+      let rgb;
+
+      if (value < threshold) {
+        const seaLevel = value / Math.max(threshold, 1);
+        const deepBand = smoothstep(0.0, 0.55, seaLevel);
+        const shallowBand = smoothstep(0.55, 1.0, seaLevel);
+        if (seaLevel < 0.55) {
+          rgb = mixColor(deepSea, sea, deepBand);
+        } else {
+          rgb = mixColor(sea, shallowSea, shallowBand);
+        }
+      } else {
+        const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
+        const compressed = Math.pow(landLevel, 1.55);
+        if (compressed < 0.18) {
+          rgb = mixColor(coast, lowland, smoothstep(0.0, 0.18, compressed));
+        } else if (compressed < 0.58) {
+          rgb = mixColor(lowland, upland, smoothstep(0.18, 0.58, compressed));
+        } else if (compressed < 0.86) {
+          rgb = mixColor(upland, mountain, smoothstep(0.58, 0.86, compressed));
+        } else {
+          rgb = mixColor(mountain, snow, smoothstep(0.86, 1.0, compressed));
+        }
+      }
+
+      image.data[pixel] = rgb[0];
+      image.data[pixel + 1] = rgb[1];
+      image.data[pixel + 2] = rgb[2];
+      image.data[pixel + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return texture;
 }
 
 const raycaster = new THREE.Raycaster();
@@ -226,6 +308,10 @@ async function bootstrap() {
     const latest = await loadJson(`${DATASET_BASE}/latest.json`);
     manifest = await loadJson(`${DATASET_BASE}/${latest.manifest_path}`);
     deriveDisplayRadii(manifest.bounds);
+    if (manifest.planet?.surface_map) {
+      planet.material.map = buildPlanetTexture(manifest.planet.surface_map);
+      planet.material.needsUpdate = true;
+    }
     await ensureVisibleChunks();
     setSelection(null);
   } catch (error) {

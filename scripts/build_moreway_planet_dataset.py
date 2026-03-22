@@ -32,6 +32,7 @@ from src.moreway_planet_explorer import DEFAULT_MAX_DEPTH, DEFAULT_MAX_LEAF_POIN
 from src.moreway_planet_explorer.build_utils import (  # noqa: E402
     PointRecord,
     build_octree,
+    build_surface_density_map,
     compute_bounds,
     estimate_density,
     make_build_id,
@@ -238,6 +239,7 @@ def main() -> int:
         "planet": {
             "radius": 10.0,
             "shell_thickness": 2.5,
+            "surface_map": build_surface_density_map(all_points),
         },
         "octree": octree,
         "chunks": chunks,

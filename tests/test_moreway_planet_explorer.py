@@ -5,6 +5,7 @@ import unittest
 from src.moreway_planet_explorer.build_utils import (
     PointRecord,
     build_octree,
+    build_surface_density_map,
     estimate_density,
     make_build_id,
     map_points_to_planet_surface,
@@ -53,6 +54,21 @@ class MorewayPlanetExplorerTests(unittest.TestCase):
         build_id = make_build_id("table-a:10|table-b:20")
         self.assertIn("-", build_id)
         self.assertGreaterEqual(len(build_id.split("-")[-1]), 10)
+
+    def test_build_surface_density_map_shape(self) -> None:
+        surface_map = build_surface_density_map(
+            [(1.0, 0.0, 0.0), (0.9, 0.1, 0.0), (-1.0, 0.0, 0.0)],
+            lat_steps=8,
+            lon_steps=16,
+            smoothing_passes=1,
+        )
+        self.assertEqual(surface_map["lat_steps"], 8)
+        self.assertEqual(surface_map["lon_steps"], 16)
+        self.assertEqual(len(surface_map["values"]), 8 * 16)
+        self.assertTrue(all(isinstance(v, int) for v in surface_map["values"]))
+        self.assertGreaterEqual(surface_map["land_threshold"], 0)
+        self.assertLessEqual(surface_map["land_threshold"], 255)
+        self.assertEqual(surface_map["land_fraction"], 0.29)
 
     def test_build_records_accepts_json_string_metadata(self) -> None:
         class FakeArray:

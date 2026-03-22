@@ -7,6 +7,7 @@ from typing import Any
 
 from .codex_mcp import CodexExecClient, CodexExecError, CodexResumeError
 from .config import Config
+from .flow_debug import NullFlowDebugLogger
 from .models import ConversationSession, IncomingMessage, ReplyMessage
 from .session_store import SessionStore
 
@@ -37,7 +38,8 @@ class CodexResponder:
     def close(self) -> None:
         self._client.close()
 
-    def build_reply(self, message: IncomingMessage, session: ConversationSession) -> ResponderResult:
+    def build_reply(self, message: IncomingMessage, session: ConversationSession, *, debug_logger=None) -> ResponderResult:
+        debug_logger = debug_logger or NullFlowDebugLogger()
         prompt = self._build_prompt(message, session)
         context = {
             "LUX4_AGENT_SESSION_KEY": session.session_key,
@@ -64,6 +66,7 @@ class CodexResponder:
 
         if current_session_id:
             try:
+                debug_logger.event("reply_turn_resume_attempt", session_id=current_session_id, prompt=prompt, context=context)
                 turn = self._run_user_reply_turn(
                     message=message,
                     session=session,
@@ -73,6 +76,7 @@ class CodexResponder:
                 )
             except CodexResumeError:
                 resume_restarted = True
+                debug_logger.event("reply_turn_resume_restarted", prior_session_id=current_session_id)
                 turn = self._client.run_turn(
                     prompt,
                     debug_label=message.message_id,
@@ -80,6 +84,7 @@ class CodexResponder:
                     on_event=self._build_event_logger(message),
                 )
         else:
+            debug_logger.event("reply_turn_new_session", prompt=prompt, context=context)
             turn = self._client.run_turn(
                 prompt,
                 debug_label=message.message_id,
@@ -91,6 +96,7 @@ class CodexResponder:
             session=session,
             context=context,
             session_id=turn.session_id,
+            debug_logger=debug_logger,
         )
 
         if self._debug_sessions:
@@ -156,9 +162,11 @@ class CodexResponder:
         session: ConversationSession,
         context: dict[str, str],
         session_id: str,
+        debug_logger,
     ) -> str:
         memory_prompt = self._build_memory_followup_prompt(message)
         try:
+            debug_logger.event("consciousness_phase_start", session_id=session_id, prompt=memory_prompt, context=context)
             turn = self._client.run_turn(
                 memory_prompt,
                 session_id=session_id,
@@ -172,12 +180,23 @@ class CodexResponder:
                 trigger_message_id=message.message_id,
                 text=entry_text,
             )
+            debug_logger.event(
+                "consciousness_phase_complete",
+                session_id=turn.session_id,
+                entry_text=entry_text,
+            )
             return turn.session_id
         except CodexExecError as exc:
             self._store.append_consciousness_stream_entry(
                 session_key=session.session_key,
                 trigger_message_id=message.message_id,
                 text=self.DEFAULT_CONSCIOUSNESS_ENTRY,
+            )
+            debug_logger.event(
+                "consciousness_phase_failed",
+                session_id=session_id,
+                error=str(exc),
+                fallback_entry=self.DEFAULT_CONSCIOUSNESS_ENTRY,
             )
             LOGGER.warning(
                 "post-reply memory phase failed; keeping prior session id",

@@ -492,6 +492,34 @@ class SessionStore:
         entries.reverse()
         return entries
 
+    def get_consciousness_stream_entries_since(
+        self,
+        session_key: str,
+        *,
+        since: datetime,
+    ) -> list[ConsciousnessStreamEntry]:
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    entry_id,
+                    session_key,
+                    trigger_message_id,
+                    text,
+                    created_at
+                FROM consciousness_stream
+                WHERE session_key = ?
+                ORDER BY created_at ASC, entry_id ASC
+                """,
+                (session_key,),
+            ).fetchall()
+        entries = []
+        for row in rows:
+            entry = _consciousness_stream_entry_from_row(row)
+            if _parse_iso8601(entry.created_at) >= since:
+                entries.append(entry)
+        return entries
+
     def get_pending_outbox_messages(self, session_key: str) -> list[OutboxMessage]:
         with self._lock, closing(self._connect()) as connection:
             rows = connection.execute(

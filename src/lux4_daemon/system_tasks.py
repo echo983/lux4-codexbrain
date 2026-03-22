@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .codex_mcp import CodexExecClient, CodexExecError, CodexResumeError
+from .flow_debug import build_flow_debug_logger
 from .models import ConversationSession, SystemTaskRun
 from .session_store import SessionStore
 
@@ -24,10 +25,20 @@ class SystemTaskBatchResult:
 
 
 class SystemTaskRunner:
-    def __init__(self, store: SessionStore, client: CodexExecClient, *, log_dir: str = "var/system_task_logs") -> None:
+    def __init__(
+        self,
+        store: SessionStore,
+        client: CodexExecClient,
+        *,
+        log_dir: str = "var/system_task_logs",
+        debug_flow_logs: bool = False,
+        debug_flow_logs_dir: str = "var/flow_debug",
+    ) -> None:
         self._store = store
         self._client = client
         self._log_dir = Path(log_dir)
+        self._debug_flow_logs = debug_flow_logs
+        self._debug_flow_logs_dir = debug_flow_logs_dir
         self._developer_instructions = self._load_system_task_instructions()
 
     def run_memory_extraction(self, *, window_minutes: int = 10) -> SystemTaskBatchResult:
@@ -173,6 +184,22 @@ class SystemTaskRunner:
         summary = ""
         log_path: str | None = None
         context = self._build_context(latest_session)
+        debug_logger = build_flow_debug_logger(
+            enabled=self._debug_flow_logs,
+            root_dir=self._debug_flow_logs_dir,
+            category="system_tasks",
+            flow_id=f"{task_type}-{latest_session.last_message_id}",
+        )
+        debug_logger.event(
+            "system_task_start",
+            task_type=task_type,
+            session_key=latest_session.session_key,
+            prompt=prompt,
+            context=context,
+            previous_codex_session_id=previous_codex_session_id,
+            window_started_at=window_started_at.isoformat(),
+            window_ended_at=window_ended_at.isoformat(),
+        )
 
         try:
             turn = self._run_task_turn(
@@ -184,10 +211,23 @@ class SystemTaskRunner:
             codex_session_id = turn.session_id
             summary = turn.reply_text.strip()
             self._store.set_system_task_codex_session(latest_session.session_key, task_type, turn.session_id)
+            debug_logger.event(
+                "system_task_complete",
+                task_type=task_type,
+                session_key=latest_session.session_key,
+                resulting_codex_session_id=codex_session_id,
+                summary=summary,
+            )
         except CodexExecError as exc:
             status = "failed"
             error_detail = str(exc)
             summary = ""
+            debug_logger.event(
+                "system_task_failed",
+                task_type=task_type,
+                session_key=latest_session.session_key,
+                error=error_detail,
+            )
             LOGGER.exception("system task failed", extra={"task_type": task_type, "session_key": latest_session.session_key})
 
         completed_at = datetime.now(UTC)
@@ -283,6 +323,14 @@ class SystemTaskRunner:
         window_ended_at: datetime,
     ) -> SystemTaskBatchResult:
         batch_log_path = self._write_batch_log(
+            task_type=task_type,
+            skipped=skipped,
+            reason=reason,
+            runs=runs,
+            window_started_at=window_started_at,
+            window_ended_at=window_ended_at,
+        )
+        self._write_batch_debug_log(
             task_type=task_type,
             skipped=skipped,
             reason=reason,
@@ -396,6 +444,41 @@ class SystemTaskRunner:
         )
         return str(path)
 
+    def _write_batch_debug_log(
+        self,
+        *,
+        task_type: str,
+        skipped: bool,
+        reason: str,
+        runs: list[SystemTaskRun],
+        window_started_at: datetime,
+        window_ended_at: datetime,
+    ) -> None:
+        debug_logger = build_flow_debug_logger(
+            enabled=self._debug_flow_logs,
+            root_dir=self._debug_flow_logs_dir,
+            category="system_task_batches",
+            flow_id=f"{task_type}-{window_ended_at.strftime('%Y%m%dT%H%M%SZ')}",
+        )
+        debug_logger.event(
+            "batch_result",
+            task_type=task_type,
+            skipped=skipped,
+            reason=reason,
+            processed_sessions=len({run.session_key for run in runs}),
+            window_started_at=window_started_at.isoformat(),
+            window_ended_at=window_ended_at.isoformat(),
+            runs=[
+                {
+                    "task_run_id": run.task_run_id,
+                    "session_key": run.session_key,
+                    "status": run.status,
+                    "log_path": run.log_path,
+                }
+                for run in runs
+            ],
+        )
+
     def _build_memory_extraction_prompt(
         self,
         session: ConversationSession,
@@ -403,16 +486,24 @@ class SystemTaskRunner:
         window_ended_at: datetime,
     ) -> str:
         recent_messages = self._store.get_recent_messages(session.session_key, since=window_started_at)
+        recent_consciousness = self._store.get_consciousness_stream_entries_since(
+            session.session_key,
+            since=window_started_at,
+        )
         transcript = "\n".join(
             f"- [{item['created_at']}] {item['direction']} {item['message_id']}: {item['text']}"
             for item in recent_messages
         ) or "- (no recent messages found)"
+        consciousness_log = "\n".join(
+            f"- [{entry.created_at}] {entry.trigger_message_id}: {entry.text}"
+            for entry in recent_consciousness
+        ) or "- (no consciousness stream records found)"
         return "\n".join(
             [
                 "System framework command. This is not user speech.",
                 "Task: memory_extraction",
                 "Do not send any user-facing message.",
-                "Use the existing conversation session plus the recent conversation transcript below.",
+                "Use the existing conversation session plus the recent conversation transcript and the recent consciousness-stream records below.",
                 "Review the recent window and write durable facts, entities, and intentions worth keeping to long-term memory in Neo4j.",
                 "Only store memory that is actually justified by the recent conversation.",
                 "Each memory item must include timestamp, confidence, retention level, source type, and source reference.",
@@ -425,6 +516,8 @@ class SystemTaskRunner:
                 f"Username: {session.sender_username}",
                 "Recent conversation transcript:",
                 transcript,
+                "Recent consciousness stream records in this window:",
+                consciousness_log,
             ]
         )
 

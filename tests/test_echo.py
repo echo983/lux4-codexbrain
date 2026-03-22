@@ -84,6 +84,7 @@ class ConfigShapeTest(unittest.TestCase):
         self.assertEqual(config.codex_timeout_seconds, 3600.0)
         self.assertFalse(config.debug_sessions)
         self.assertFalse(config.debug_codex_jsonl)
+        self.assertFalse(config.debug_flow_logs)
 
     def test_startup_validation_requires_cloudflare_queue_config(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "LUX4_CF_ACCOUNT_ID, LUX4_CF_QUEUE_ID, LUX4_CF_API_TOKEN"):
@@ -151,13 +152,19 @@ class ConfigShapeTest(unittest.TestCase):
     def test_reads_boolean_debug_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env_path = Path(tmpdir) / ".env"
-            env_path.write_text("LUX4_DEBUG_SESSIONS=true\nLUX4_DEBUG_CODEX_JSONL=1\n", encoding="utf-8")
+            env_path.write_text(
+                "LUX4_DEBUG_SESSIONS=true\n"
+                "LUX4_DEBUG_CODEX_JSONL=1\n"
+                "LUX4_DEBUG_FLOW_LOGS=on\n",
+                encoding="utf-8",
+            )
 
             with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
                 config = Config.from_env()
 
         self.assertTrue(config.debug_sessions)
         self.assertTrue(config.debug_codex_jsonl)
+        self.assertTrue(config.debug_flow_logs)
 
     def test_resolves_codex_binary_to_absolute_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -760,7 +767,7 @@ class DaemonOutboxFlowTest(unittest.TestCase):
 
             publisher = ObservingPublisher()
 
-            def slow_build_reply(incoming, session):
+            def slow_build_reply(incoming, session, *, debug_logger=None):
                 self.assertFalse(proactive_published.is_set())
                 queued = store.enqueue_outbox_message(
                     session_key=session.session_key,
@@ -801,6 +808,42 @@ class DaemonOutboxFlowTest(unittest.TestCase):
 
             self.assertEqual([m.text for m in publisher.messages], ["agent proactive message", "final reply"])
             service.stop()
+
+    def test_service_writes_debug_flow_log_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            publisher = CapturingPublisher()
+            responder = mock.Mock()
+            responder.build_reply.return_value = mock.Mock(
+                reply=ReplyMessage(
+                    version=1,
+                    kind="reply_message",
+                    source="rocketchat",
+                    siteUrl="https://rocket.example.com",
+                    roomId="room-1",
+                    replyMode="message",
+                    text="final reply",
+                ),
+                codex_session_id="thread-123",
+                resume_attempted=False,
+                resume_restarted=False,
+            )
+            config = Config(debug_flow_logs=True, debug_flow_logs_dir=str(Path(tmpdir) / "flow"))
+            service = DaemonService(store=store, publisher=publisher, responder=responder, config=config)
+            service.start()
+
+            message = _build_incoming_message()
+            service.accept(message)
+            service._queue.join()
+            service.stop()
+
+            files = sorted((Path(tmpdir) / "flow" / "main").glob("*.jsonl"))
+            self.assertEqual(len(files), 1)
+            log_text = files[0].read_text(encoding="utf-8")
+            self.assertIn('"event": "message_received"', log_text)
+            self.assertIn('"event": "reply_phase_start"', log_text)
+            self.assertIn('"event": "reply_phase_complete"', log_text)
+            self.assertIn('"event": "reply_published"', log_text)
 
 
 def _build_incoming_message(message_id: str = "msg-1", text: str = "hello echo"):

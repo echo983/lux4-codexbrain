@@ -27,7 +27,13 @@ def main() -> int:
     config = Config.from_env()
     store = SessionStore(config.database_path)
     client = CodexExecClient(config)
-    runner = SystemTaskRunner(store, client, log_dir=args.log_dir)
+    runner = SystemTaskRunner(
+        store,
+        client,
+        log_dir=args.log_dir,
+        debug_flow_logs=config.debug_flow_logs,
+        debug_flow_logs_dir=config.debug_flow_logs_dir,
+    )
     try:
         result = runner.run_memory_consolidation(window_hours=args.window_hours)
     finally:

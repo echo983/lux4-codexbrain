@@ -25,6 +25,8 @@ class Config:
     debug_sessions: bool = False
     debug_codex_jsonl: bool = False
     debug_codex_jsonl_dir: str = "var/codex_jsonl"
+    debug_flow_logs: bool = False
+    debug_flow_logs_dir: str = "var/flow_debug"
     request_timeout_seconds: float = 10.0
 
     @classmethod
@@ -49,6 +51,8 @@ class Config:
             debug_sessions=read_config_flag("LUX4_DEBUG_SESSIONS", dotenv_values, False),
             debug_codex_jsonl=read_config_flag("LUX4_DEBUG_CODEX_JSONL", dotenv_values, False),
             debug_codex_jsonl_dir=read_config_value("LUX4_DEBUG_CODEX_JSONL_DIR", dotenv_values, "var/codex_jsonl"),
+            debug_flow_logs=read_config_flag("LUX4_DEBUG_FLOW_LOGS", dotenv_values, False),
+            debug_flow_logs_dir=read_config_value("LUX4_DEBUG_FLOW_LOGS_DIR", dotenv_values, "var/flow_debug"),
             request_timeout_seconds=float(read_config_value("LUX4_REQUEST_TIMEOUT_SECONDS", dotenv_values, "10")),
         )
 

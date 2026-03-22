@@ -255,6 +255,33 @@ class CloudflareQueueReplyPublisherTest(unittest.TestCase):
             "content_type": "json",
         })
 
+    def test_normalizes_literal_backslash_newlines_before_publish(self) -> None:
+        config = Config(
+            cloudflare_account_id="acct-123",
+            cloudflare_queue_id="queue-456",
+            cloudflare_api_token="token-789",
+        )
+        publisher = CloudflareQueueReplyPublisher(config)
+        message = ReplyMessage(
+            version=1,
+            kind="reply_message",
+            source="rocketchat",
+            siteUrl="https://rocket.example.com",
+            roomId="room-1",
+            replyMode="message",
+            text="第一段\\n\\n第二段\\n1. 条目",
+        )
+
+        response = mock.MagicMock()
+        response.__enter__.return_value.status = 200
+
+        with mock.patch("lux4_daemon.publisher.request.urlopen", return_value=response) as urlopen_mock:
+            publisher.publish(message)
+
+        outbound = urlopen_mock.call_args.args[0]
+        payload = json.loads(outbound.data)
+        self.assertEqual(payload["body"]["text"], "第一段\n\n第二段\n1. 条目")
+
 
 class SessionStoreTest(unittest.TestCase):
     def test_creates_and_updates_conversation_session(self) -> None:

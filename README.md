@@ -102,8 +102,12 @@ PYTHONPATH=src python3 -m lux4_daemon
 | `LUX4_CF_API_TOKEN` | 无 | Cloudflare API Token，需有队列写权限 |
 | `LUX4_CODEX_BINARY` | `codex` | Codex CLI 可执行文件路径 |
 | `LUX4_CODEX_MODEL` | 空 | 可选，显式指定 Codex model |
-| `LUX4_CODEX_TIMEOUT_SECONDS` | `240` | 单次 Codex 调用超时 |
+| `LUX4_CODEX_TIMEOUT_SECONDS` | `3600` | 单次 Codex 调用超时 |
 | `LUX4_DEBUG_SESSIONS` | `0` | 打开后输出会话续接调试日志 |
+| `LUX4_DEBUG_CODEX_JSONL` | `0` | 打开后把 Codex MCP 原始 JSONL 事件流落盘 |
+| `LUX4_DEBUG_CODEX_JSONL_DIR` | `var/codex_jsonl` | Codex MCP 原始 JSONL 调试目录 |
+| `LUX4_DEBUG_FLOW_LOGS` | `0` | 打开后把主流程与 cron/system task 的结构化调试流水日志落盘 |
+| `LUX4_DEBUG_FLOW_LOGS_DIR` | `var/flow_debug` | 结构化调试流水日志目录 |
 | `CODEX_API_KEY` | 无 | Codex API key，会透传给 `codex mcp-server` |
 | `LUX4_REQUEST_TIMEOUT_SECONDS` | `10` | reply 出站 HTTP 超时秒数 |
 | `GOOGLE_MAPS_API_KEY` | 无 | Google Maps / Routes / Geocoding / Weather API key |
@@ -115,6 +119,8 @@ PYTHONPATH=src python3 -m lux4_daemon
 - `.env` 文件只补充缺失项，不覆盖已经存在的进程环境变量。
 - 如果本机没有可复用的 Codex 登录态，建议显式配置 `CODEX_API_KEY`。
 - `LUX4_DEBUG_SESSIONS=1` 时，会输出本轮使用的 `stored_codex_session_id`、返回的 `returned_codex_session_id`、是否尝试了 `resume`，以及是否发生了重建。
+- `LUX4_DEBUG_CODEX_JSONL=1` 时，会把底层 `codex mcp-server` 事件流写到 `var/codex_jsonl/`。
+- `LUX4_DEBUG_FLOW_LOGS=1` 时，会把主消息处理流程、`cron A` / `cron B` 与 system task 的结构化 JSONL 调试日志写到 `var/flow_debug/`。
 - 如果要使用 Google 原语脚本，当前项目 `.env` 里还需要配置 `GOOGLE_MAPS_API_KEY`。
 
 ---

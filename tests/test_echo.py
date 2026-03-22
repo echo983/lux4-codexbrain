@@ -81,9 +81,10 @@ class ConfigShapeTest(unittest.TestCase):
     def test_config_defaults(self) -> None:
         config = Config()
         self.assertEqual(config.port, 18473)
-        self.assertEqual(config.codex_timeout_seconds, 240.0)
+        self.assertEqual(config.codex_timeout_seconds, 3600.0)
         self.assertFalse(config.debug_sessions)
         self.assertFalse(config.debug_codex_jsonl)
+        self.assertFalse(config.debug_flow_logs)
 
     def test_startup_validation_requires_cloudflare_queue_config(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "LUX4_CF_ACCOUNT_ID, LUX4_CF_QUEUE_ID, LUX4_CF_API_TOKEN"):
@@ -151,13 +152,19 @@ class ConfigShapeTest(unittest.TestCase):
     def test_reads_boolean_debug_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             env_path = Path(tmpdir) / ".env"
-            env_path.write_text("LUX4_DEBUG_SESSIONS=true\nLUX4_DEBUG_CODEX_JSONL=1\n", encoding="utf-8")
+            env_path.write_text(
+                "LUX4_DEBUG_SESSIONS=true\n"
+                "LUX4_DEBUG_CODEX_JSONL=1\n"
+                "LUX4_DEBUG_FLOW_LOGS=on\n",
+                encoding="utf-8",
+            )
 
             with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
                 config = Config.from_env()
 
         self.assertTrue(config.debug_sessions)
         self.assertTrue(config.debug_codex_jsonl)
+        self.assertTrue(config.debug_flow_logs)
 
     def test_resolves_codex_binary_to_absolute_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -248,6 +255,33 @@ class CloudflareQueueReplyPublisherTest(unittest.TestCase):
             "content_type": "json",
         })
 
+    def test_normalizes_literal_backslash_newlines_before_publish(self) -> None:
+        config = Config(
+            cloudflare_account_id="acct-123",
+            cloudflare_queue_id="queue-456",
+            cloudflare_api_token="token-789",
+        )
+        publisher = CloudflareQueueReplyPublisher(config)
+        message = ReplyMessage(
+            version=1,
+            kind="reply_message",
+            source="rocketchat",
+            siteUrl="https://rocket.example.com",
+            roomId="room-1",
+            replyMode="message",
+            text="第一段\\n\\n第二段\\n1. 条目",
+        )
+
+        response = mock.MagicMock()
+        response.__enter__.return_value.status = 200
+
+        with mock.patch("lux4_daemon.publisher.request.urlopen", return_value=response) as urlopen_mock:
+            publisher.publish(message)
+
+        outbound = urlopen_mock.call_args.args[0]
+        payload = json.loads(outbound.data)
+        self.assertEqual(payload["body"]["text"], "第一段\n\n第二段\n1. 条目")
+
 
 class SessionStoreTest(unittest.TestCase):
     def test_creates_and_updates_conversation_session(self) -> None:
@@ -307,6 +341,33 @@ class SessionStoreTest(unittest.TestCase):
 
             store.mark_outbox_message_sent(queued.outbox_id)
             self.assertEqual(store.get_pending_outbox_messages(message.session_key), [])
+
+    def test_can_append_and_read_recent_consciousness_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+
+            first = store.append_consciousness_stream_entry(
+                session_key=session.session_key,
+                trigger_message_id="msg-1",
+                text="第一条意识流",
+            )
+            second = store.append_consciousness_stream_entry(
+                session_key=session.session_key,
+                trigger_message_id="msg-2",
+                text="第二条意识流",
+            )
+            third = store.append_consciousness_stream_entry(
+                session_key=session.session_key,
+                trigger_message_id="msg-3",
+                text="第三条意识流",
+            )
+
+            recent = store.get_recent_consciousness_stream_entries(session.session_key, limit=2)
+
+        self.assertEqual([entry.entry_id for entry in recent], [second.entry_id, third.entry_id])
+        self.assertEqual([entry.text for entry in recent], ["第二条意识流", "第三条意识流"])
 
 
 class CodexExecClientTest(unittest.TestCase):
@@ -521,20 +582,23 @@ class CodexResponderTest(unittest.TestCase):
             client = mock.Mock()
             client.run_turn.side_effect = [
                 CodexTurnResult(session_id="thread-123", reply_text="hello from codex"),
-                CodexTurnResult(session_id="thread-123", reply_text=""),
+                CodexTurnResult(session_id="thread-123", reply_text="本轮意识流"),
             ]
             responder = CodexResponder(store=store, client=client)
 
             result = responder.build_reply(message, session)
+            stream_entries = store.get_recent_consciousness_stream_entries(message.session_key)
 
         self.assertEqual(client.run_turn.call_count, 2)
         self.assertNotIn("session_id", client.run_turn.call_args_list[0].kwargs)
         self.assertEqual(client.run_turn.call_args_list[1].kwargs["session_id"], "thread-123")
-        self.assertIn("System post-reply command", client.run_turn.call_args_list[1].args[0])
+        self.assertIn("System consciousness-stream command", client.run_turn.call_args_list[1].args[0])
         self.assertEqual(result.codex_session_id, "thread-123")
         self.assertEqual(result.reply.text, "hello from codex")
         self.assertFalse(result.resume_attempted)
         self.assertFalse(result.resume_restarted)
+        self.assertEqual(len(stream_entries), 1)
+        self.assertEqual(stream_entries[0].text, "本轮意识流")
 
     def test_resume_failure_clears_session_and_restarts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -546,12 +610,13 @@ class CodexResponderTest(unittest.TestCase):
             client.run_turn.side_effect = [
                 CodexResumeError("resume failed"),
                 CodexTurnResult(session_id="thread-new", reply_text="fresh reply"),
-                CodexTurnResult(session_id="thread-new", reply_text=""),
+                CodexTurnResult(session_id="thread-new", reply_text="恢复后的意识流"),
             ]
             responder = CodexResponder(store=store, client=client)
 
             result = responder.build_reply(message, session)
             reset_session = store.get_session(message.session_key)
+            stream_entries = store.get_recent_consciousness_stream_entries(message.session_key)
 
         self.assertEqual(client.run_turn.call_count, 3)
         self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "thread-old")
@@ -563,6 +628,7 @@ class CodexResponderTest(unittest.TestCase):
         self.assertEqual(result.codex_session_id, "thread-new")
         self.assertTrue(result.resume_attempted)
         self.assertTrue(result.resume_restarted)
+        self.assertEqual(stream_entries[-1].text, "恢复后的意识流")
 
     def test_resume_timeout_clears_session_and_restarts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -574,12 +640,13 @@ class CodexResponderTest(unittest.TestCase):
             client.run_turn.side_effect = [
                 CodexResumeError("codex exec timed out after 240.0 seconds"),
                 CodexTurnResult(session_id="thread-new", reply_text="fresh reply"),
-                CodexTurnResult(session_id="thread-new", reply_text=""),
+                CodexTurnResult(session_id="thread-new", reply_text="超时恢复意识流"),
             ]
             responder = CodexResponder(store=store, client=client)
 
             result = responder.build_reply(message, session)
             reset_session = store.get_session(message.session_key)
+            stream_entries = store.get_recent_consciousness_stream_entries(message.session_key)
 
         self.assertEqual(client.run_turn.call_count, 3)
         self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "thread-old")
@@ -591,21 +658,41 @@ class CodexResponderTest(unittest.TestCase):
         self.assertEqual(result.codex_session_id, "thread-new")
         self.assertTrue(result.resume_attempted)
         self.assertTrue(result.resume_restarted)
+        self.assertEqual(stream_entries[-1].text, "超时恢复意识流")
 
     def test_prompt_is_minimal_turn_input(self) -> None:
-        responder = CodexResponder(store=mock.Mock(), client=mock.Mock())
+        store = mock.Mock()
+        store.get_recent_consciousness_stream_entries.return_value = []
+        responder = CodexResponder(store=store, client=mock.Mock())
         message = _build_incoming_message()
+        session = mock.Mock(session_key=message.session_key)
 
-        prompt = responder._build_prompt(message)
+        prompt = responder._build_prompt(message, session)
 
         self.assertIn("Local timestamp: ", prompt)
         self.assertIn("Room ID: room-1", prompt)
         self.assertIn("User ID: user-1", prompt)
         self.assertIn("Username: alice", prompt)
         self.assertIn("Latest user message:\nhello echo", prompt)
+        self.assertNotIn("Recent consciousness stream records:", prompt)
         self.assertNotIn("lux4-send-message", prompt)
         self.assertNotIn("You are Lux, an IM assistant.", prompt)
         self.assertNotIn("neo4j-cypher-ops", prompt)
+
+    def test_prompt_includes_recent_consciousness_entries(self) -> None:
+        entry_one = mock.Mock(created_at="2026-03-22T01:00:00+00:00", text="第一条意识流")
+        entry_two = mock.Mock(created_at="2026-03-22T01:01:00+00:00", text="第二条意识流")
+        store = mock.Mock()
+        store.get_recent_consciousness_stream_entries.return_value = [entry_one, entry_two]
+        responder = CodexResponder(store=store, client=mock.Mock())
+        message = _build_incoming_message()
+        session = mock.Mock(session_key=message.session_key)
+
+        prompt = responder._build_prompt(message, session)
+
+        self.assertIn("Recent consciousness stream records:", prompt)
+        self.assertIn("[2026-03-22T01:00:00+00:00] 第一条意识流", prompt)
+        self.assertIn("[2026-03-22T01:01:00+00:00] 第二条意识流", prompt)
 
     def test_debug_logging_includes_session_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -615,7 +702,7 @@ class CodexResponderTest(unittest.TestCase):
             client = mock.Mock()
             client.run_turn.side_effect = [
                 CodexTurnResult(session_id="thread-123", reply_text="hello from codex"),
-                CodexTurnResult(session_id="thread-123", reply_text=""),
+                CodexTurnResult(session_id="thread-123", reply_text="意识流日志"),
             ]
             responder = CodexResponder(store=store, client=client, config=Config(debug_sessions=True))
 
@@ -641,10 +728,13 @@ class CodexResponderTest(unittest.TestCase):
             responder = CodexResponder(store=store, client=client)
 
             result = responder.build_reply(message, session)
+            stream_entries = store.get_recent_consciousness_stream_entries(message.session_key)
 
         self.assertEqual(result.reply.text, "hello from codex")
         self.assertEqual(result.codex_session_id, "thread-123")
         self.assertEqual(client.run_turn.call_count, 2)
+        self.assertEqual(len(stream_entries), 1)
+        self.assertEqual(stream_entries[0].text, "没有内容")
 
 
 class DaemonOutboxFlowTest(unittest.TestCase):
@@ -704,7 +794,7 @@ class DaemonOutboxFlowTest(unittest.TestCase):
 
             publisher = ObservingPublisher()
 
-            def slow_build_reply(incoming, session):
+            def slow_build_reply(incoming, session, *, debug_logger=None):
                 self.assertFalse(proactive_published.is_set())
                 queued = store.enqueue_outbox_message(
                     session_key=session.session_key,
@@ -745,6 +835,42 @@ class DaemonOutboxFlowTest(unittest.TestCase):
 
             self.assertEqual([m.text for m in publisher.messages], ["agent proactive message", "final reply"])
             service.stop()
+
+    def test_service_writes_debug_flow_log_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            publisher = CapturingPublisher()
+            responder = mock.Mock()
+            responder.build_reply.return_value = mock.Mock(
+                reply=ReplyMessage(
+                    version=1,
+                    kind="reply_message",
+                    source="rocketchat",
+                    siteUrl="https://rocket.example.com",
+                    roomId="room-1",
+                    replyMode="message",
+                    text="final reply",
+                ),
+                codex_session_id="thread-123",
+                resume_attempted=False,
+                resume_restarted=False,
+            )
+            config = Config(debug_flow_logs=True, debug_flow_logs_dir=str(Path(tmpdir) / "flow"))
+            service = DaemonService(store=store, publisher=publisher, responder=responder, config=config)
+            service.start()
+
+            message = _build_incoming_message()
+            service.accept(message)
+            service._queue.join()
+            service.stop()
+
+            files = sorted((Path(tmpdir) / "flow" / "main").glob("*.jsonl"))
+            self.assertEqual(len(files), 1)
+            log_text = files[0].read_text(encoding="utf-8")
+            self.assertIn('"event": "message_received"', log_text)
+            self.assertIn('"event": "reply_phase_start"', log_text)
+            self.assertIn('"event": "reply_phase_complete"', log_text)
+            self.assertIn('"event": "reply_published"', log_text)
 
 
 def _build_incoming_message(message_id: str = "msg-1", text: str = "hello echo"):

@@ -20,7 +20,7 @@ class CloudflareQueueReplyPublisher:
 
     def publish(self, message: ReplyMessage) -> None:
         body = json.dumps({
-            "body": message.as_dict(),
+            "body": _normalized_reply_payload(message),
             "content_type": "json",
         }).encode("utf-8")
         headers = {
@@ -43,3 +43,20 @@ class CloudflareQueueReplyPublisher:
             "https://api.cloudflare.com/client/v4"
             f"/accounts/{self._account_id}/queues/{self._queue_id}/messages"
         )
+
+
+def _normalized_reply_payload(message: ReplyMessage) -> dict[str, object]:
+    payload = message.as_dict()
+    text = payload.get("text")
+    if isinstance(text, str):
+        payload["text"] = _normalize_user_facing_text(text)
+    return payload
+
+
+def _normalize_user_facing_text(text: str) -> str:
+    normalized = text
+    normalized = normalized.replace("\\r\\n", "\n")
+    normalized = normalized.replace("\\n", "\n")
+    normalized = normalized.replace("\\t", "\t")
+    normalized = normalized.replace("\\r", "\r")
+    return normalized

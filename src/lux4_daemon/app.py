@@ -27,7 +27,7 @@ def create_app(config: Config | None = None) -> tuple[DaemonService, ThreadingHT
         client=CodexExecClient(resolved_config),
         config=resolved_config,
     )
-    daemon_service = DaemonService(store=store, publisher=publisher, responder=responder)
+    daemon_service = DaemonService(store=store, publisher=publisher, responder=responder, config=resolved_config)
     daemon_service.start()
     server = build_server(resolved_config.host, resolved_config.port, daemon_service)
     return daemon_service, server

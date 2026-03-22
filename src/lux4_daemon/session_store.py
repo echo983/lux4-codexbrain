@@ -7,7 +7,7 @@ import uuid
 from contextlib import closing
 from datetime import UTC, datetime
 
-from .models import ConversationSession, IncomingMessage, OutboxMessage, SystemTaskLock, SystemTaskRun
+from .models import ConsciousnessStreamEntry, ConversationSession, IncomingMessage, OutboxMessage, SystemTaskLock, SystemTaskRun, SystemTaskSession
 
 
 class SessionStore:
@@ -73,6 +73,15 @@ class SessionStore:
                         FOREIGN KEY(session_key) REFERENCES sessions(session_key)
                     );
 
+                    CREATE TABLE IF NOT EXISTS consciousness_stream (
+                        entry_id TEXT PRIMARY KEY,
+                        session_key TEXT NOT NULL,
+                        trigger_message_id TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY(session_key) REFERENCES sessions(session_key)
+                    );
+
                     CREATE TABLE IF NOT EXISTS system_task_runs (
                         task_run_id TEXT PRIMARY KEY,
                         task_type TEXT NOT NULL,
@@ -86,6 +95,17 @@ class SessionStore:
                         log_path TEXT,
                         summary TEXT NOT NULL DEFAULT '',
                         error_detail TEXT NOT NULL DEFAULT '',
+                        FOREIGN KEY(session_key) REFERENCES sessions(session_key)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS system_task_sessions (
+                        session_key TEXT NOT NULL,
+                        task_type TEXT NOT NULL,
+                        codex_session_id TEXT,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (session_key, task_type),
                         FOREIGN KEY(session_key) REFERENCES sessions(session_key)
                     );
 
@@ -278,6 +298,91 @@ class SessionStore:
             raise RuntimeError(f"failed to load session after codex session clear: {session_key}")
         return session
 
+    def get_system_task_session(self, session_key: str, task_type: str) -> SystemTaskSession | None:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    session_key,
+                    task_type,
+                    codex_session_id,
+                    status,
+                    created_at,
+                    updated_at
+                FROM system_task_sessions
+                WHERE session_key = ? AND task_type = ?
+                """,
+                (session_key, task_type),
+            ).fetchone()
+        if row is None:
+            return None
+        return _system_task_session_from_row(row)
+
+    def set_system_task_codex_session(
+        self,
+        session_key: str,
+        task_type: str,
+        codex_session_id: str,
+        *,
+        status: str = "active",
+    ) -> SystemTaskSession:
+        now = _utc_now()
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO system_task_sessions (
+                        session_key,
+                        task_type,
+                        codex_session_id,
+                        status,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_key, task_type) DO UPDATE SET
+                        codex_session_id = excluded.codex_session_id,
+                        status = excluded.status,
+                        updated_at = excluded.updated_at
+                    """,
+                    (session_key, task_type, codex_session_id, status, now, now),
+                )
+        system_task_session = self.get_system_task_session(session_key, task_type)
+        if system_task_session is None:
+            raise RuntimeError(f"failed to load system task session after update: {session_key}::{task_type}")
+        return system_task_session
+
+    def clear_system_task_codex_session(
+        self,
+        session_key: str,
+        task_type: str,
+        *,
+        status: str = "reset_required",
+    ) -> SystemTaskSession:
+        now = _utc_now()
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO system_task_sessions (
+                        session_key,
+                        task_type,
+                        codex_session_id,
+                        status,
+                        created_at,
+                        updated_at
+                    ) VALUES (?, ?, NULL, ?, ?, ?)
+                    ON CONFLICT(session_key, task_type) DO UPDATE SET
+                        codex_session_id = NULL,
+                        status = excluded.status,
+                        updated_at = excluded.updated_at
+                    """,
+                    (session_key, task_type, status, now, now),
+                )
+        system_task_session = self.get_system_task_session(session_key, task_type)
+        if system_task_session is None:
+            raise RuntimeError(f"failed to load system task session after clear: {session_key}::{task_type}")
+        return system_task_session
+
     def enqueue_outbox_message(
         self,
         *,
@@ -328,6 +433,92 @@ class SessionStore:
         if message is None:
             raise RuntimeError(f"failed to load outbox message after insert: {outbox_id}")
         return message
+
+    def append_consciousness_stream_entry(
+        self,
+        *,
+        session_key: str,
+        trigger_message_id: str,
+        text: str,
+    ) -> ConsciousnessStreamEntry:
+        now = _utc_now()
+        entry_id = uuid.uuid4().hex
+        normalized_text = text.strip() or "没有内容"
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    INSERT INTO consciousness_stream (
+                        entry_id,
+                        session_key,
+                        trigger_message_id,
+                        text,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (entry_id, session_key, trigger_message_id, normalized_text, now),
+                )
+        return ConsciousnessStreamEntry(
+            entry_id=entry_id,
+            session_key=session_key,
+            trigger_message_id=trigger_message_id,
+            text=normalized_text,
+            created_at=now,
+        )
+
+    def get_recent_consciousness_stream_entries(
+        self,
+        session_key: str,
+        *,
+        limit: int = 2,
+    ) -> list[ConsciousnessStreamEntry]:
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    entry_id,
+                    session_key,
+                    trigger_message_id,
+                    text,
+                    created_at
+                FROM consciousness_stream
+                WHERE session_key = ?
+                ORDER BY created_at DESC, entry_id DESC
+                LIMIT ?
+                """,
+                (session_key, limit),
+            ).fetchall()
+        entries = [_consciousness_stream_entry_from_row(row) for row in rows]
+        entries.reverse()
+        return entries
+
+    def get_consciousness_stream_entries_since(
+        self,
+        session_key: str,
+        *,
+        since: datetime,
+    ) -> list[ConsciousnessStreamEntry]:
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    entry_id,
+                    session_key,
+                    trigger_message_id,
+                    text,
+                    created_at
+                FROM consciousness_stream
+                WHERE session_key = ?
+                ORDER BY created_at ASC, entry_id ASC
+                """,
+                (session_key,),
+            ).fetchall()
+        entries = []
+        for row in rows:
+            entry = _consciousness_stream_entry_from_row(row)
+            if _parse_iso8601(entry.created_at) >= since:
+                entries.append(entry)
+        return entries
 
     def get_pending_outbox_messages(self, session_key: str) -> list[OutboxMessage]:
         with self._lock, closing(self._connect()) as connection:
@@ -704,6 +895,16 @@ def _outbox_from_row(row: sqlite3.Row) -> OutboxMessage:
     )
 
 
+def _consciousness_stream_entry_from_row(row: sqlite3.Row) -> ConsciousnessStreamEntry:
+    return ConsciousnessStreamEntry(
+        entry_id=row["entry_id"],
+        session_key=row["session_key"],
+        trigger_message_id=row["trigger_message_id"],
+        text=row["text"],
+        created_at=row["created_at"],
+    )
+
+
 def _system_task_run_from_row(row: sqlite3.Row) -> SystemTaskRun:
     return SystemTaskRun(
         task_run_id=row["task_run_id"],
@@ -718,6 +919,17 @@ def _system_task_run_from_row(row: sqlite3.Row) -> SystemTaskRun:
         log_path=row["log_path"],
         summary=row["summary"],
         error_detail=row["error_detail"],
+    )
+
+
+def _system_task_session_from_row(row: sqlite3.Row) -> SystemTaskSession:
+    return SystemTaskSession(
+        session_key=row["session_key"],
+        task_type=row["task_type"],
+        codex_session_id=row["codex_session_id"],
+        status=row["status"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 

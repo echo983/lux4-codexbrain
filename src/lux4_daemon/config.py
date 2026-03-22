@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +30,7 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         dotenv_values = load_dotenv_file(Path.cwd() / ".env")
+        configured_codex_binary = read_config_value("LUX4_CODEX_BINARY", dotenv_values, "codex")
         return cls(
             host=read_config_value("LUX4_HOST", dotenv_values, "0.0.0.0"),
             port=int(read_config_value("LUX4_PORT", dotenv_values, "18473")),
@@ -36,7 +38,7 @@ class Config:
             cloudflare_account_id=read_config_value("LUX4_CF_ACCOUNT_ID", dotenv_values, ""),
             cloudflare_queue_id=read_config_value("LUX4_CF_QUEUE_ID", dotenv_values, ""),
             cloudflare_api_token=read_config_value("LUX4_CF_API_TOKEN", dotenv_values, ""),
-            codex_binary=read_config_value("LUX4_CODEX_BINARY", dotenv_values, "codex"),
+            codex_binary=resolve_executable(configured_codex_binary),
             codex_model=read_config_value("LUX4_CODEX_MODEL", dotenv_values, ""),
             codex_api_key=read_config_value("CODEX_API_KEY", dotenv_values, ""),
             neo4j_uri=read_config_alias(("NEO4J_URI", "NEO4J_BOLT_URL"), dotenv_values, ""),
@@ -120,3 +122,22 @@ def read_config_flag(key: str, dotenv_values: dict[str, str], default: bool) -> 
     raw_default = "1" if default else "0"
     value = read_config_value(key, dotenv_values, raw_default).lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def resolve_executable(command: str) -> str:
+    candidate = command.strip()
+    if not candidate:
+        return candidate
+
+    if os.path.sep in candidate:
+        return candidate
+
+    resolved = shutil.which(candidate)
+    if resolved:
+        return resolved
+
+    fallback = Path("/usr/local/bin") / candidate
+    if fallback.exists():
+        return str(fallback)
+
+    return candidate

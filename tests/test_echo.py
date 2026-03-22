@@ -159,6 +159,27 @@ class ConfigShapeTest(unittest.TestCase):
         self.assertTrue(config.debug_sessions)
         self.assertTrue(config.debug_codex_jsonl)
 
+    def test_resolves_codex_binary_to_absolute_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text("LUX4_CODEX_BINARY=codex\n", encoding="utf-8")
+
+            with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
+                with mock.patch("lux4_daemon.config.shutil.which", return_value="/usr/local/bin/codex"):
+                    config = Config.from_env()
+
+        self.assertEqual(config.codex_binary, "/usr/local/bin/codex")
+
+    def test_keeps_explicit_absolute_codex_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text("LUX4_CODEX_BINARY=/opt/bin/codex\n", encoding="utf-8")
+
+            with mock.patch("lux4_daemon.config.Path.cwd", return_value=Path(tmpdir)):
+                config = Config.from_env()
+
+        self.assertEqual(config.codex_binary, "/opt/bin/codex")
+
 
 class RequestBodyParsingTest(unittest.TestCase):
     def test_reads_content_length_json(self) -> None:
@@ -321,7 +342,7 @@ class CodexExecClientTest(unittest.TestCase):
         self.assertEqual(arguments["sandbox"], "workspace-write")
         self.assertEqual(arguments["cwd"], str(Path.cwd()))
         self.assertIn("lux4-send-message", arguments["developer-instructions"])
-        self.assertIn("所有面向用户的消息，包括中间更新和最终答案，都必须通过 `lux4-send-message` 发送。", arguments["developer-instructions"])
+        self.assertIn("所有面向用户的消息，包括中间更新、澄清问题、阶段结果和最终答案，都必须通过 `lux4-send-message` 发送。", arguments["developer-instructions"])
         self.assertEqual(env["CODEX_API_KEY"], "api-key")
         self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
         self.assertEqual(env["NEO4J_USERNAME"], "neo4j-user")
@@ -476,15 +497,18 @@ class CodexResponderTest(unittest.TestCase):
             message = _build_incoming_message()
             session = store.get_or_create_session(message)
             client = mock.Mock()
-            client.run_turn.return_value = CodexTurnResult(
-                session_id="thread-123",
-                reply_text="hello from codex",
-            )
+            client.run_turn.side_effect = [
+                CodexTurnResult(session_id="thread-123", reply_text="hello from codex"),
+                CodexTurnResult(session_id="thread-123", reply_text=""),
+            ]
             responder = CodexResponder(store=store, client=client)
 
             result = responder.build_reply(message, session)
 
-        client.run_turn.assert_called_once()
+        self.assertEqual(client.run_turn.call_count, 2)
+        self.assertNotIn("session_id", client.run_turn.call_args_list[0].kwargs)
+        self.assertEqual(client.run_turn.call_args_list[1].kwargs["session_id"], "thread-123")
+        self.assertIn("System post-reply command", client.run_turn.call_args_list[1].args[0])
         self.assertEqual(result.codex_session_id, "thread-123")
         self.assertEqual(result.reply.text, "hello from codex")
         self.assertFalse(result.resume_attempted)
@@ -500,15 +524,17 @@ class CodexResponderTest(unittest.TestCase):
             client.run_turn.side_effect = [
                 CodexResumeError("resume failed"),
                 CodexTurnResult(session_id="thread-new", reply_text="fresh reply"),
+                CodexTurnResult(session_id="thread-new", reply_text=""),
             ]
             responder = CodexResponder(store=store, client=client)
 
             result = responder.build_reply(message, session)
             reset_session = store.get_session(message.session_key)
 
-        self.assertEqual(client.run_turn.call_count, 2)
+        self.assertEqual(client.run_turn.call_count, 3)
         self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "thread-old")
         self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
+        self.assertEqual(client.run_turn.call_args_list[2].kwargs["session_id"], "thread-new")
         assert reset_session is not None
         self.assertIsNone(reset_session.active_codex_session_id)
         self.assertEqual(reset_session.status, "reset_required")
@@ -526,15 +552,17 @@ class CodexResponderTest(unittest.TestCase):
             client.run_turn.side_effect = [
                 CodexResumeError("codex exec timed out after 240.0 seconds"),
                 CodexTurnResult(session_id="thread-new", reply_text="fresh reply"),
+                CodexTurnResult(session_id="thread-new", reply_text=""),
             ]
             responder = CodexResponder(store=store, client=client)
 
             result = responder.build_reply(message, session)
             reset_session = store.get_session(message.session_key)
 
-        self.assertEqual(client.run_turn.call_count, 2)
+        self.assertEqual(client.run_turn.call_count, 3)
         self.assertEqual(client.run_turn.call_args_list[0].kwargs["session_id"], "thread-old")
         self.assertNotIn("session_id", client.run_turn.call_args_list[1].kwargs)
+        self.assertEqual(client.run_turn.call_args_list[2].kwargs["session_id"], "thread-new")
         assert reset_session is not None
         self.assertIsNone(reset_session.active_codex_session_id)
         self.assertEqual(reset_session.status, "reset_required")
@@ -563,10 +591,10 @@ class CodexResponderTest(unittest.TestCase):
             message = _build_incoming_message()
             session = store.get_or_create_session(message)
             client = mock.Mock()
-            client.run_turn.return_value = CodexTurnResult(
-                session_id="thread-123",
-                reply_text="hello from codex",
-            )
+            client.run_turn.side_effect = [
+                CodexTurnResult(session_id="thread-123", reply_text="hello from codex"),
+                CodexTurnResult(session_id="thread-123", reply_text=""),
+            ]
             responder = CodexResponder(store=store, client=client, config=Config(debug_sessions=True))
 
             with self.assertLogs("lux4_daemon.responder", level="INFO") as logs:
@@ -577,6 +605,24 @@ class CodexResponderTest(unittest.TestCase):
         self.assertIn("message_id=msg-1", joined)
         self.assertIn("stored_codex_session_id=None", joined)
         self.assertIn("returned_codex_session_id=thread-123", joined)
+
+    def test_memory_phase_failure_does_not_break_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SessionStore(str(Path(tmpdir) / "daemon.sqlite3"))
+            message = _build_incoming_message()
+            session = store.get_or_create_session(message)
+            client = mock.Mock()
+            client.run_turn.side_effect = [
+                CodexTurnResult(session_id="thread-123", reply_text="hello from codex"),
+                CodexResumeError("memory write phase failed"),
+            ]
+            responder = CodexResponder(store=store, client=client)
+
+            result = responder.build_reply(message, session)
+
+        self.assertEqual(result.reply.text, "hello from codex")
+        self.assertEqual(result.codex_session_id, "thread-123")
+        self.assertEqual(client.run_turn.call_count, 2)
 
 
 class DaemonOutboxFlowTest(unittest.TestCase):

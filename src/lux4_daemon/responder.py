@@ -62,15 +62,14 @@ class CodexResponder:
 
         if current_session_id:
             try:
-                turn = self._client.run_turn(
-                    prompt,
-                    session_id=current_session_id,
-                    debug_label=message.message_id,
+                turn = self._run_user_reply_turn(
+                    message=message,
+                    session=session,
+                    prompt=prompt,
                     context=context,
-                    on_event=self._build_event_logger(message),
+                    current_session_id=current_session_id,
                 )
             except CodexResumeError:
-                self._store.clear_active_codex_session(session.session_key)
                 resume_restarted = True
                 turn = self._client.run_turn(
                     prompt,
@@ -85,6 +84,11 @@ class CodexResponder:
                 context=context,
                 on_event=self._build_event_logger(message),
             )
+        final_session_id = self._run_post_reply_memory_phase(
+            message=message,
+            context=context,
+            session_id=turn.session_id,
+        )
 
         if self._debug_sessions:
             LOGGER.info(
@@ -94,7 +98,7 @@ class CodexResponder:
                 message.message_id,
                 session.session_key,
                 current_session_id,
-                turn.session_id,
+                final_session_id,
                 resume_attempted,
                 resume_restarted,
             )
@@ -109,10 +113,62 @@ class CodexResponder:
                 replyMode="message",
                 text=turn.reply_text,
             ),
-            codex_session_id=turn.session_id,
+            codex_session_id=final_session_id,
             resume_attempted=resume_attempted,
             resume_restarted=resume_restarted,
         )
+
+    def _run_user_reply_turn(
+        self,
+        *,
+        message: IncomingMessage,
+        session: ConversationSession,
+        prompt: str,
+        context: dict[str, str],
+        current_session_id: str | None,
+    ) -> Any:
+        if current_session_id:
+            try:
+                return self._client.run_turn(
+                    prompt,
+                    session_id=current_session_id,
+                    debug_label=message.message_id,
+                    context=context,
+                    on_event=self._build_event_logger(message),
+                )
+            except CodexResumeError:
+                self._store.clear_active_codex_session(session.session_key)
+                raise
+        return self._client.run_turn(
+            prompt,
+            debug_label=message.message_id,
+            context=context,
+            on_event=self._build_event_logger(message),
+        )
+
+    def _run_post_reply_memory_phase(
+        self,
+        *,
+        message: IncomingMessage,
+        context: dict[str, str],
+        session_id: str,
+    ) -> str:
+        memory_prompt = self._build_memory_followup_prompt(message)
+        try:
+            turn = self._client.run_turn(
+                memory_prompt,
+                session_id=session_id,
+                debug_label=f"{message.message_id}-memory",
+                context=context,
+                on_event=self._build_event_logger(message),
+            )
+            return turn.session_id
+        except CodexResumeError as exc:
+            LOGGER.warning(
+                "post-reply memory phase failed; keeping prior session id",
+                extra={"message_id": message.message_id, "session_id": session_id, "detail": str(exc)},
+            )
+            return session_id
 
     def _build_event_logger(self, message: IncomingMessage):
         def on_event(payload: dict[str, Any]) -> None:
@@ -143,4 +199,18 @@ class CodexResponder:
             f"Username: {message.sender_username}",
             "Latest user message:",
             message.text,
+        ])
+
+    def _build_memory_followup_prompt(self, message: IncomingMessage) -> str:
+        return "\n".join([
+            "System post-reply command. This is not user speech.",
+            "The user-facing reply phase is complete.",
+            "Do not send any user-facing message in this phase.",
+            "Evaluate whether the just-finished turn contains durable memory worth writing to long-term memory.",
+            "If durable memory is justified, write it now.",
+            "If no durable memory is justified, do nothing.",
+            "Keep the final output empty.",
+            f"Latest user message: {message.text}",
+            f"User ID: {message.sender_user_id}",
+            f"Username: {message.sender_username}",
         ])

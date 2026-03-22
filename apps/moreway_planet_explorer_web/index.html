@@ -12,9 +12,14 @@
         <h1>Moreway Planet Explorer</h1>
         <p>围绕球壳探索 LanceDB 文档。</p>
         <div id="status">正在加载...</div>
-        <div id="selection" class="selection empty">点击星球上的点查看文档。</div>
+        <div id="results-summary" class="results-summary">正在计算视野焦点…</div>
+        <div id="results-list" class="results-list"></div>
       </aside>
+      <div class="topbar">
+        <button id="focus-region-toggle" class="topbar-button" type="button">隐藏视觉中心框</button>
+      </div>
       <div id="overlay-layer"></div>
+      <div id="focus-region-box" class="focus-region-box"></div>
       <main id="scene-root"></main>
     </div>
   </body>

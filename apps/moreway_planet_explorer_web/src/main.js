@@ -5,9 +5,12 @@ import { tableFromIPC } from 'apache-arrow';
 
 const DATASET_BASE = '/var/moreway_planet_dataset';
 const statusEl = document.getElementById('status');
-const selectionEl = document.getElementById('selection');
+const resultsSummaryEl = document.getElementById('results-summary');
+const resultsListEl = document.getElementById('results-list');
 const sceneRoot = document.getElementById('scene-root');
 const overlayLayerEl = document.getElementById('overlay-layer');
+const focusRegionBoxEl = document.getElementById('focus-region-box');
+const focusRegionToggleEl = document.getElementById('focus-region-toggle');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -61,6 +64,26 @@ function updatePlanetScale() {
   atmosphere.scale.setScalar(planetRadius + 0.45);
 }
 
+function updateControlBounds() {
+  const nearestSurface = Math.max(pointRadius, planetRadius + 0.08);
+  controls.minDistance = nearestSurface + 0.9;
+
+  const verticalHalfFov = THREE.MathUtils.degToRad(camera.fov * 0.5);
+  const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * camera.aspect);
+  const limitingHalfFov = Math.min(verticalHalfFov, horizontalHalfFov);
+  const requiredDistance = nearestSurface / Math.sin(Math.max(limitingHalfFov, 0.01));
+  controls.maxDistance = Math.max(requiredDistance * 1.08, controls.minDistance + 6);
+
+  if (controls.getDistance() < controls.minDistance) {
+    const dir = camera.position.clone().normalize();
+    camera.position.copy(dir.multiplyScalar(controls.minDistance));
+  } else if (controls.getDistance() > controls.maxDistance) {
+    const dir = camera.position.clone().normalize();
+    camera.position.copy(dir.multiplyScalar(controls.maxDistance));
+  }
+  controls.update();
+}
+
 function deriveDisplayRadii(bounds) {
   const [minX, minY, minZ] = bounds.min;
   const [maxX, maxY, maxZ] = bounds.max;
@@ -82,6 +105,7 @@ function deriveDisplayRadii(bounds) {
   pointRadius = maxRadius;
   planetRadius = Math.max(0.1, maxRadius - 0.08);
   updatePlanetScale();
+  updateControlBounds();
 }
 
 function buildPlanetTexture(surfaceMap) {
@@ -172,36 +196,57 @@ let manifest = null;
 let loadedChunks = new Map();
 let pointMeshes = [];
 let selectedPayload = null;
-let selectedPosition = null;
+let focusResults = [];
+let focusLabelEntries = [];
+const focusLabelEls = [];
+let focusResultHistory = new Map();
+const starTexture = buildStarTexture();
+const topFocusHighlight = new THREE.Points(
+  new THREE.BufferGeometry(),
+  new THREE.PointsMaterial({
+    size: 0.16,
+    transparent: true,
+    opacity: 1,
+    map: starTexture,
+    alphaMap: starTexture,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    color: 0xffffff,
+  }),
+);
+topFocusHighlight.visible = false;
+scene.add(topFocusHighlight);
+let focusRegionVisible = true;
 
-const pointLabelEl = document.createElement('div');
-pointLabelEl.className = 'point-label hidden';
-overlayLayerEl.appendChild(pointLabelEl);
+function buildStarTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.28, 'rgba(255,255,255,0.95)');
+  gradient.addColorStop(0.55, 'rgba(180,220,255,0.55)');
+  gradient.addColorStop(1, 'rgba(180,220,255,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 64, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
 function setStatus(text) {
   statusEl.textContent = text;
 }
 
 function setSelection(payload) {
-  if (!payload) {
-    selectedPayload = null;
-    selectedPosition = null;
-    pointLabelEl.className = 'point-label hidden';
-    pointLabelEl.textContent = '';
-    selectionEl.className = 'selection empty';
-    selectionEl.textContent = '点击星球上的点查看文档。';
-    return;
-  }
-  const title = payload.title || payload.path_in_snapshot || payload.doc_id || 'Untitled';
-  selectedPayload = payload;
-  selectionEl.className = 'selection';
-  selectionEl.innerHTML = `
-    <h2>${escapeHtml(title)}</h2>
-    <div class="meta">${escapeHtml(payload.table || '')} · ${escapeHtml(payload.doc_kind || 'unknown')} · ${escapeHtml(payload.source_type || 'unknown')}</div>
-    <p class="preview">${escapeHtml(payload.text_preview || '')}</p>
-  `;
-  pointLabelEl.className = 'point-label';
-  pointLabelEl.textContent = title;
+  selectedPayload = payload || null;
+  renderFocusResults();
+}
+
+function syncFocusRegionVisibility() {
+  focusRegionBoxEl.classList.toggle('is-hidden', !focusRegionVisible);
+  focusRegionToggleEl.textContent = focusRegionVisible ? '隐藏视觉中心框' : '显示视觉中心框';
 }
 
 function escapeHtml(text) {
@@ -273,34 +318,218 @@ function buildChunkPoints(rows) {
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   const material = new THREE.PointsMaterial({
-    size: 0.22,
+    size: 0.08,
     vertexColors: true,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.95,
+    map: starTexture,
+    alphaMap: starTexture,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
   });
   const points = new THREE.Points(geometry, material);
   points.userData.payloads = payloads;
   return points;
 }
 
-function updatePointLabelPosition() {
-  if (!selectedPayload || !selectedPosition) {
-    pointLabelEl.className = 'point-label hidden';
+function ensureFocusLabelPool(size) {
+  while (focusLabelEls.length < size) {
+    const el = document.createElement('div');
+    el.className = 'focus-point-label';
+    el.style.display = 'none';
+    overlayLayerEl.appendChild(el);
+    focusLabelEls.push(el);
+  }
+}
+
+function updateFocusResults() {
+  const center = new THREE.Vector2(0, 0);
+  const candidates = [];
+  const cameraHemisphere = camera.position.clone().normalize();
+  const focusRect = focusRegionBoxEl.getBoundingClientRect();
+  const canvasRect = renderer.domElement.getBoundingClientRect();
+  const focusLeft = focusRect.left - canvasRect.left;
+  const focusRight = focusRect.right - canvasRect.left;
+  const focusTop = focusRect.top - canvasRect.top;
+  const focusBottom = focusRect.bottom - canvasRect.top;
+
+  for (const mesh of pointMeshes) {
+    const positions = mesh.geometry.getAttribute('position');
+    const payloads = mesh.userData.payloads || [];
+    for (let index = 0; index < positions.count; index += 1) {
+      const world = new THREE.Vector3(
+        positions.getX(index),
+        positions.getY(index),
+        positions.getZ(index),
+      );
+      const surfaceNormal = world.clone().normalize();
+      if (surfaceNormal.dot(cameraHemisphere) <= 0.0) continue;
+      const projected = world.clone().project(camera);
+      if (projected.z < -1 || projected.z > 1) continue;
+      if (Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1) continue;
+      const screenX = ((projected.x + 1) / 2) * canvasRect.width;
+      const screenY = ((-projected.y + 1) / 2) * canvasRect.height;
+      if (screenX < focusLeft || screenX > focusRight || screenY < focusTop || screenY > focusBottom) continue;
+
+      const payload = payloads[index];
+      if (!payload) continue;
+
+      const distance = center.distanceTo(new THREE.Vector2(projected.x, projected.y));
+      const key = payload.keep_md_fid || payload.doc_id || payload.path_in_snapshot || payload.title;
+      const previous = focusResultHistory.get(key);
+      const stableDistance = previous == null
+        ? distance
+        : distance * 0.72 + previous * 0.28;
+      candidates.push({
+        payload,
+        distance: stableDistance,
+        rawDistance: distance,
+        position: world,
+        key,
+      });
+    }
+  }
+
+  candidates.sort((a, b) => a.distance - b.distance);
+  const unique = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const payload = candidate.payload;
+    const key = candidate.key;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+    if (unique.length >= 48) break;
+  }
+  focusLabelEntries = unique;
+  focusResults = unique.slice(0, 10);
+  focusResultHistory = new Map(unique.map((entry) => [entry.key, entry.rawDistance]));
+  renderFocusResults();
+}
+
+function renderFocusResults() {
+  if (!focusResults.length) {
+    resultsSummaryEl.textContent = '当前视锥中心附近暂无可见文档。';
+    resultsListEl.innerHTML = '<div class="results-empty">转动或缩放星球，列表会按视觉中心实时更新。</div>';
     return;
   }
 
-  const projected = selectedPosition.clone().project(camera);
-  const visible = projected.z >= -1 && projected.z <= 1;
-  if (!visible) {
-    pointLabelEl.className = 'point-label hidden';
+  resultsSummaryEl.textContent = `视觉中心附近文档 ${focusResults.length} 条，按屏幕中心距离排序。`;
+  resultsListEl.innerHTML = focusResults.map((entry, idx) => {
+    const payload = entry.payload;
+    const title = payload.title || payload.path_in_snapshot || payload.doc_id || 'Untitled';
+    const meta = [
+      payload.table || '',
+      payload.doc_kind || 'unknown',
+      payload.source_type || 'unknown',
+    ].filter(Boolean).join(' · ');
+    const selectedClass = selectedPayload && (
+      (selectedPayload.keep_md_fid && payload.keep_md_fid && selectedPayload.keep_md_fid === payload.keep_md_fid) ||
+      (selectedPayload.doc_id && payload.doc_id && selectedPayload.doc_id === payload.doc_id)
+    ) ? ' is-selected' : '';
+    return `
+      <article class="result-card${selectedClass}">
+        <div class="result-rank">#${idx + 1} · 中心距离 ${entry.distance.toFixed(3)}</div>
+        <h2 class="result-title">${escapeHtml(title)}</h2>
+        <div class="result-meta">${escapeHtml(meta)}</div>
+        <p class="result-preview">${escapeHtml(payload.text_preview || '')}</p>
+      </article>
+    `;
+  }).join('');
+}
+
+function updateFocusLabels() {
+  ensureFocusLabelPool(focusLabelEntries.length);
+  const canvasRect = renderer.domElement.getBoundingClientRect();
+  const occupiedRects = [];
+  const occupiedPointZones = focusLabelEntries.map((entry) => {
+    const projected = entry.position.clone().project(camera);
+    const screenX = canvasRect.left + ((projected.x + 1) / 2) * canvasRect.width;
+    const screenY = canvasRect.top + ((-projected.y + 1) / 2) * canvasRect.height;
+    return {
+      left: screenX - 18,
+      right: screenX + 18,
+      top: screenY - 18,
+      bottom: screenY + 18,
+    };
+  });
+  for (let i = 0; i < focusLabelEls.length; i += 1) {
+    const labelEl = focusLabelEls[i];
+    const entry = focusLabelEntries[i];
+    if (!entry) {
+      labelEl.style.display = 'none';
+      continue;
+    }
+
+    const projected = entry.position.clone().project(camera);
+    const visible = projected.z >= -1 && projected.z <= 1
+      && Math.abs(projected.x) <= 1
+      && Math.abs(projected.y) <= 1;
+    if (!visible) {
+      labelEl.style.display = 'none';
+      continue;
+    }
+
+    const screenX = canvasRect.left + ((projected.x + 1) / 2) * canvasRect.width;
+    const screenY = canvasRect.top + ((-projected.y + 1) / 2) * canvasRect.height;
+    const title = entry.payload.title || entry.payload.path_in_snapshot || entry.payload.doc_id || 'Untitled';
+    labelEl.textContent = title;
+    labelEl.style.left = `${screenX}px`;
+    labelEl.style.top = `${screenY}px`;
+    labelEl.style.display = 'block';
+
+    const width = labelEl.offsetWidth || 120;
+    const height = labelEl.offsetHeight || 26;
+    const labelRect = {
+      left: screenX - width / 2,
+      right: screenX + width / 2,
+      top: screenY + 26,
+      bottom: screenY + 26 + height,
+    };
+    const overlapsLabels = occupiedRects.some((other) => !(
+      labelRect.right < other.left ||
+      labelRect.left > other.right ||
+      labelRect.bottom < other.top ||
+      labelRect.top > other.bottom
+    ));
+    const overlapsPoints = occupiedPointZones.some((other, otherIndex) => otherIndex !== i && !(
+      labelRect.right < other.left ||
+      labelRect.left > other.right ||
+      labelRect.bottom < other.top ||
+      labelRect.top > other.bottom
+    ));
+    const overlapsOwnPoint = !(
+      labelRect.right < occupiedPointZones[i].left ||
+      labelRect.left > occupiedPointZones[i].right ||
+      labelRect.bottom < occupiedPointZones[i].top ||
+      labelRect.top > occupiedPointZones[i].bottom
+    );
+    const isPrimary = i === 0;
+    if (!isPrimary && (overlapsLabels || overlapsPoints || overlapsOwnPoint)) {
+      labelEl.style.display = 'none';
+      continue;
+    }
+
+    occupiedRects.push(labelRect);
+  }
+}
+
+function updateTopFocusHighlight() {
+  const top = focusResults[0];
+  if (!top) {
+    topFocusHighlight.visible = false;
     return;
   }
-
-  const screenX = ((projected.x + 1) / 2) * window.innerWidth;
-  const screenY = ((-projected.y + 1) / 2) * window.innerHeight;
-  pointLabelEl.className = 'point-label';
-  pointLabelEl.style.left = `${screenX}px`;
-  pointLabelEl.style.top = `${screenY}px`;
+  const geometry = topFocusHighlight.geometry;
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [top.position.x, top.position.y, top.position.z],
+      3,
+    ),
+  );
+  geometry.computeBoundingSphere();
+  topFocusHighlight.visible = true;
 }
 
 async function bootstrap() {
@@ -314,6 +543,7 @@ async function bootstrap() {
     }
     await ensureVisibleChunks();
     setSelection(null);
+    updateFocusResults();
   } catch (error) {
     setStatus(`加载失败：${error.message}`);
   }
@@ -332,16 +562,6 @@ window.addEventListener('pointerdown', (event) => {
   const hit = intersects[0];
   const index = hit.index;
   const payload = hit.object.userData.payloads?.[index];
-  if (payload && Number.isInteger(index)) {
-    const positions = hit.object.geometry.getAttribute('position');
-    selectedPosition = new THREE.Vector3(
-      positions.getX(index),
-      positions.getY(index),
-      positions.getZ(index),
-    );
-  } else {
-    selectedPosition = null;
-  }
   setSelection(payload || null);
 });
 
@@ -352,6 +572,7 @@ window.addEventListener('resize', () => {
 });
 
 let lastChunkRefresh = 0;
+let lastFocusRefresh = 0;
 function animate(now = 0) {
   requestAnimationFrame(animate);
   controls.update();
@@ -359,9 +580,19 @@ function animate(now = 0) {
     lastChunkRefresh = now;
     ensureVisibleChunks();
   }
-  updatePointLabelPosition();
+  if (manifest && now - lastFocusRefresh > 280) {
+    lastFocusRefresh = now;
+    updateFocusResults();
+  }
+  updateFocusLabels();
+  updateTopFocusHighlight();
   renderer.render(scene, camera);
 }
 
 bootstrap();
+focusRegionToggleEl.addEventListener('click', () => {
+  focusRegionVisible = !focusRegionVisible;
+  syncFocusRegionVisibility();
+});
+syncFocusRegionVisibility();
 animate();

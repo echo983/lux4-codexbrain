@@ -11,7 +11,8 @@ function serveLocalDataset() {
     configureServer(server) {
       server.middlewares.use('/var/moreway_planet_dataset', (req, res, next) => {
         const requestPath = (req.url || '/').split('?')[0];
-        const normalized = path.normalize(requestPath).replace(/^(\.\.(\/|\\|$))+/, '');
+        const relativePath = requestPath.replace(/^\/+/, '');
+        const normalized = path.normalize(relativePath).replace(/^(\.\.(\/|\\|$))+/, '');
         const target = path.join(datasetRoot, normalized);
         if (!target.startsWith(datasetRoot)) {
           res.statusCode = 403;

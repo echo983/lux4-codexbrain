@@ -18,6 +18,23 @@ class PointRecord:
     payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SurfaceGenerationConfig:
+    lat_steps: int = 72
+    lon_steps: int = 144
+    smoothing_passes: int = 1
+    land_fraction: float = 0.29
+    cluster_iterations: int = 6
+    keep_top_clusters: int = 4
+    angular_bins: int = 48
+    tail_quantile: float = 0.88
+    tail_multiplier: float = 1.08
+    point_cutoff: float = 0.90
+    point_power: float = 4.4
+    outer_extension_cutoff: float = 0.84
+    outer_extension_weight: float = 0.26
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -222,6 +239,22 @@ def _project_to_local_plane(
     return (_dot(point, tangent_x), _dot(point, tangent_y))
 
 
+def _quantile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    q = min(max(q, 0.0), 1.0)
+    pos = q * (len(ordered) - 1)
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return ordered[lo]
+    t = pos - lo
+    return ordered[lo] * (1.0 - t) + ordered[hi] * t
+
+
 def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
     x, y = point
     inside = False
@@ -238,16 +271,53 @@ def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, flo
     return inside
 
 
+def _cluster_seed_count(direction_count: int) -> int:
+    return max(6, min(18, round(math.sqrt(direction_count) / 3)))
+
+
+def _smooth_surface_values(values: list[float], *, lat_steps: int, lon_steps: int) -> list[float]:
+    smoothed: list[float] = []
+    for lat_idx in range(lat_steps):
+        for lon_idx in range(lon_steps):
+            total = 0.0
+            weight = 0.0
+            for lat_offset in (-1, 0, 1):
+                for lon_offset in (-1, 0, 1):
+                    neighbor_lat = min(max(lat_idx + lat_offset, 0), lat_steps - 1)
+                    neighbor_lon = (lon_idx + lon_offset) % lon_steps
+                    idx = neighbor_lat * lon_steps + neighbor_lon
+                    local_weight = 2.0 if lat_offset == 0 and lon_offset == 0 else 1.0
+                    total += values[idx] * local_weight
+                    weight += local_weight
+            smoothed.append(total / weight)
+    return smoothed
+
+
+def _normalize_surface_values(values: list[float]) -> list[int]:
+    min_value = min(values)
+    max_value = max(values)
+    if max_value <= min_value:
+        return [128 for _ in values]
+    return [
+        int(round(((value - min_value) / (max_value - min_value)) * 255.0))
+        for value in values
+    ]
+
+
 def _cluster_surface_directions(
     directions: list[tuple[float, float, float]],
     *,
     cluster_count: int | None = None,
     iterations: int = 6,
+    keep_top_clusters: int = 4,
+    angular_bins: int = 48,
+    tail_quantile: float = 0.88,
+    tail_multiplier: float = 1.08,
 ) -> list[dict[str, Any]]:
     if not directions:
         return []
     if cluster_count is None:
-        cluster_count = max(6, min(18, round(math.sqrt(len(directions)) / 3)))
+        cluster_count = _cluster_seed_count(len(directions))
     cluster_count = max(1, min(cluster_count, len(directions)))
 
     seeds = [directions[0]]
@@ -291,7 +361,6 @@ def _cluster_surface_directions(
     total = float(len(directions))
     north = (0.0, 1.0, 0.0)
     east = (1.0, 0.0, 0.0)
-    angular_bins = 48
     for center, group in zip(centers, groups):
         if len(group) < 3:
             continue
@@ -301,17 +370,33 @@ def _cluster_surface_directions(
         tangent_x = _normalize_direction(tangent_x)
         tangent_y = _normalize_direction(_cross(center, tangent_x))
 
-        bin_best: dict[int, tuple[float, tuple[float, float]]] = {}
+        member_radii: list[float] = []
+        projected_members: list[tuple[int, float, tuple[float, float]]] = []
         for member in group:
             px, py = _project_to_local_plane(member, center, tangent_x, tangent_y)
             angle = math.atan2(py, px)
             radius = math.sqrt(px * px + py * py)
             if radius <= 1e-6:
                 continue
+            member_radii.append(radius)
             bin_index = int(((angle + math.pi) / (2.0 * math.pi)) * angular_bins) % angular_bins
+            projected_members.append((bin_index, radius, (px, py)))
+
+        if len(projected_members) < 3:
+            continue
+
+        # Truncate long-tail outliers so a few extreme points do not create
+        # unnatural spikes or stretched peninsulas in the continental hull.
+        radius_cap = _quantile(member_radii, tail_quantile) * tail_multiplier
+        bin_best: dict[int, tuple[float, tuple[float, float]]] = {}
+        for bin_index, radius, point in projected_members:
+            if radius > radius_cap and radius > 0.0:
+                scale = radius_cap / radius
+                point = (point[0] * scale, point[1] * scale)
+                radius = radius_cap
             best = bin_best.get(bin_index)
             if best is None or radius > best[0]:
-                bin_best[bin_index] = (radius, (px, py))
+                bin_best[bin_index] = (radius, point)
 
         polygon = [
             point for _, point in sorted(bin_best.values(), key=lambda item: math.atan2(item[1][1], item[1][0]))
@@ -329,7 +414,52 @@ def _cluster_surface_directions(
                 "polygon": polygon,
             }
         )
-    return clusters
+    clusters.sort(key=lambda cluster: cluster["weight"], reverse=True)
+    return clusters[: max(1, keep_top_clusters)]
+
+
+def _cluster_landmass_strength(
+    cluster: dict[str, Any],
+    cell: tuple[float, float, float],
+    *,
+    point_cutoff: float,
+    point_power: float,
+    outer_extension_cutoff: float,
+    outer_extension_weight: float,
+) -> float:
+    local_point = _project_to_local_plane(
+        cell,
+        cluster["center"],
+        cluster["tangent_x"],
+        cluster["tangent_y"],
+    )
+    inside_polygon = _point_in_polygon(local_point, cluster["polygon"])
+    edge_growth = 0.0
+    for member in cluster["members"]:
+        dot = max(-1.0, min(1.0, _dot(member, cell)))
+        proximity = (dot + 1.0) * 0.5
+        if proximity <= point_cutoff:
+            continue
+        local = (proximity - point_cutoff) / max(1.0 - point_cutoff, 1e-9)
+        edge_growth += local ** point_power
+
+    density_shape = edge_growth ** 0.58 if edge_growth > 0.0 else 0.0
+    if inside_polygon:
+        return (0.50 + density_shape * 0.82) * (0.7 + cluster["weight"] ** 0.55)
+    if density_shape <= 0.0:
+        return 0.0
+
+    center_dot = max(-1.0, min(1.0, _dot(cluster["center"], cell)))
+    center_proximity = (center_dot + 1.0) * 0.5
+    if center_proximity <= outer_extension_cutoff:
+        return 0.0
+    outer_bias = (center_proximity - outer_extension_cutoff) / max(1.0 - outer_extension_cutoff, 1e-9)
+    return (
+        density_shape
+        * outer_bias
+        * outer_extension_weight
+        * (0.72 + cluster["weight"] ** 0.5)
+    )
 
 
 def build_surface_density_map(
@@ -340,27 +470,45 @@ def build_surface_density_map(
     smoothing_passes: int = 1,
     land_fraction: float = 0.29,
 ) -> dict[str, Any]:
+    config = SurfaceGenerationConfig(
+        lat_steps=lat_steps,
+        lon_steps=lon_steps,
+        smoothing_passes=smoothing_passes,
+        land_fraction=land_fraction,
+    )
+    return build_surface_density_map_with_config(points, config)
+
+
+def build_surface_density_map_with_config(
+    points: list[tuple[float, float, float]],
+    config: SurfaceGenerationConfig,
+) -> dict[str, Any]:
     if not points:
-        values = [0 for _ in range(lat_steps * lon_steps)]
+        values = [0 for _ in range(config.lat_steps * config.lon_steps)]
         return {
-            "lat_steps": lat_steps,
-            "lon_steps": lon_steps,
+            "lat_steps": config.lat_steps,
+            "lon_steps": config.lon_steps,
             "values": values,
             "land_threshold": 128,
         }
 
     directions = [_normalize_direction(point) for point in points]
-    clusters = _cluster_surface_directions(directions)
+    clusters = _cluster_surface_directions(
+        directions,
+        iterations=config.cluster_iterations,
+        keep_top_clusters=config.keep_top_clusters,
+        angular_bins=config.angular_bins,
+        tail_quantile=config.tail_quantile,
+        tail_multiplier=config.tail_multiplier,
+    )
     raw_values: list[float] = []
-    point_cutoff = 0.92
-    point_power = 5.0
-    for lat_idx in range(lat_steps):
-        v = (lat_idx + 0.5) / lat_steps
+    for lat_idx in range(config.lat_steps):
+        v = (lat_idx + 0.5) / config.lat_steps
         theta = v * math.pi
         sin_theta = math.sin(theta)
         cos_theta = math.cos(theta)
-        for lon_idx in range(lon_steps):
-            u = (lon_idx + 0.5) / lon_steps
+        for lon_idx in range(config.lon_steps):
+            u = (lon_idx + 0.5) / config.lon_steps
             phi = u * (2.0 * math.pi)
             cell = (
                 -math.cos(phi) * sin_theta,
@@ -369,69 +517,33 @@ def build_surface_density_map(
             )
             land = 0.0
             for cluster in clusters:
-                local_point = _project_to_local_plane(
+                candidate = _cluster_landmass_strength(
+                    cluster,
                     cell,
-                    cluster["center"],
-                    cluster["tangent_x"],
-                    cluster["tangent_y"],
+                    point_cutoff=config.point_cutoff,
+                    point_power=config.point_power,
+                    outer_extension_cutoff=config.outer_extension_cutoff,
+                    outer_extension_weight=config.outer_extension_weight,
                 )
-                if not _point_in_polygon(local_point, cluster["polygon"]):
-                    continue
-
-                edge_growth = 0.0
-                for member in cluster["members"]:
-                    dot = max(-1.0, min(1.0, _dot(member, cell)))
-                    proximity = (dot + 1.0) * 0.5
-                    if proximity <= point_cutoff:
-                        continue
-                    local = (proximity - point_cutoff) / max(1.0 - point_cutoff, 1e-9)
-                    edge_growth += local ** point_power
-
-                candidate = (0.55 + edge_growth ** 0.6) * (0.7 + cluster["weight"] ** 0.55)
                 if candidate > land:
                     land = candidate
             raw_values.append(land)
 
-    def smooth(values: list[float]) -> list[float]:
-        smoothed: list[float] = []
-        for lat_idx in range(lat_steps):
-            for lon_idx in range(lon_steps):
-                total = 0.0
-                weight = 0.0
-                for lat_offset in (-1, 0, 1):
-                    for lon_offset in (-1, 0, 1):
-                        neighbor_lat = min(max(lat_idx + lat_offset, 0), lat_steps - 1)
-                        neighbor_lon = (lon_idx + lon_offset) % lon_steps
-                        idx = neighbor_lat * lon_steps + neighbor_lon
-                        local_weight = 2.0 if lat_offset == 0 and lon_offset == 0 else 1.0
-                        total += values[idx] * local_weight
-                        weight += local_weight
-                smoothed.append(total / weight)
-        return smoothed
-
     values = raw_values
-    for _ in range(smoothing_passes):
-        values = smooth(values)
+    for _ in range(config.smoothing_passes):
+        values = _smooth_surface_values(values, lat_steps=config.lat_steps, lon_steps=config.lon_steps)
 
-    min_value = min(values)
-    max_value = max(values)
-    if max_value <= min_value:
-        normalized = [128 for _ in values]
-    else:
-        normalized = [
-            int(round(((value - min_value) / (max_value - min_value)) * 255.0))
-            for value in values
-        ]
+    normalized = _normalize_surface_values(values)
 
     sorted_values = sorted(normalized)
     # Earth-like land/ocean split: about 29% land, 71% ocean.
-    land_fraction = min(max(land_fraction, 0.01), 0.99)
+    land_fraction = min(max(config.land_fraction, 0.01), 0.99)
     threshold_index = int(len(sorted_values) * (1.0 - land_fraction))
     threshold_index = min(max(threshold_index, 0), len(sorted_values) - 1)
     land_threshold = sorted_values[threshold_index]
     return {
-        "lat_steps": lat_steps,
-        "lon_steps": lon_steps,
+        "lat_steps": config.lat_steps,
+        "lon_steps": config.lon_steps,
         "values": normalized,
         "land_threshold": land_threshold,
         "land_fraction": land_fraction,

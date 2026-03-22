@@ -4,8 +4,11 @@ import unittest
 
 from src.moreway_planet_explorer.build_utils import (
     PointRecord,
+    SurfaceGenerationConfig,
+    _cluster_surface_directions,
     build_octree,
     build_surface_density_map,
+    build_surface_density_map_with_config,
     estimate_density,
     make_build_id,
     map_points_to_planet_surface,
@@ -69,6 +72,34 @@ class MorewayPlanetExplorerTests(unittest.TestCase):
         self.assertGreaterEqual(surface_map["land_threshold"], 0)
         self.assertLessEqual(surface_map["land_threshold"], 255)
         self.assertEqual(surface_map["land_fraction"], 0.29)
+
+    def test_build_surface_density_map_with_config_matches_wrapper(self) -> None:
+        points = [(1.0, 0.0, 0.0), (0.9, 0.1, 0.0), (-1.0, 0.0, 0.0), (-0.9, -0.1, 0.0)]
+        config = SurfaceGenerationConfig(lat_steps=8, lon_steps=16, smoothing_passes=1, land_fraction=0.29)
+        direct = build_surface_density_map_with_config(points, config)
+        wrapped = build_surface_density_map(points, lat_steps=8, lon_steps=16, smoothing_passes=1, land_fraction=0.29)
+        self.assertEqual(direct["values"], wrapped["values"])
+        self.assertEqual(direct["land_threshold"], wrapped["land_threshold"])
+
+    def test_cluster_surface_directions_keeps_top4_by_weight(self) -> None:
+        directions = []
+        center_groups = [
+            [(1.0, 0.0, 0.0), (0.98, 0.10, 0.08), (0.98, -0.09, 0.06), (0.98, 0.05, -0.08)],
+            [(0.0, 1.0, 0.0), (0.10, 0.98, 0.08), (-0.09, 0.98, 0.06), (0.05, 0.98, -0.08)],
+            [(0.0, 0.0, 1.0), (0.10, 0.08, 0.98), (-0.09, 0.06, 0.98), (0.05, -0.08, 0.98)],
+            [(-1.0, 0.0, 0.0), (-0.98, 0.10, 0.08), (-0.98, -0.09, 0.06), (-0.98, 0.05, -0.08)],
+            [(0.0, -1.0, 0.0), (0.10, -0.98, 0.08), (-0.09, -0.98, 0.06), (0.05, -0.98, -0.08)],
+        ]
+        counts = [10, 8, 6, 4, 2]
+        for group, count in zip(center_groups, counts):
+            for i in range(count):
+                raw = group[i % len(group)]
+                length = sum(v * v for v in raw) ** 0.5
+                directions.append(tuple(v / length for v in raw))
+        clusters = _cluster_surface_directions(directions, cluster_count=5, iterations=2, keep_top_clusters=4)
+        self.assertGreaterEqual(len(clusters), 4)
+        weights = [cluster["weight"] for cluster in clusters]
+        self.assertEqual(weights[:4], sorted(weights[:4], reverse=True))
 
     def test_build_records_accepts_json_string_metadata(self) -> None:
         class FakeArray:

@@ -40,6 +40,7 @@ from src.moreway_planet_explorer.build_utils import (  # noqa: E402
     normalize_points,
     utc_now_iso,
 )
+from scripts.bake_moreway_planet_material_textures import bake_for_manifest  # noqa: E402
 
 
 def require_dependencies() -> tuple[Any, Any, Any, Any]:
@@ -245,6 +246,8 @@ def main() -> int:
         "chunks": chunks,
     }
     write_json(build_dir / "manifest.json", manifest)
+    baked_textures = bake_for_manifest(build_dir / "manifest.json")
+    manifest["planet"]["baked_textures"] = baked_textures
 
     latest = {
         "build_id": build_id,

@@ -187,8 +187,12 @@ python3 scripts/capability_status_report.py --output-dir var/capability_status -
 
 - 数据集构建：
   - [build_moreway_planet_dataset.py](/root/lux4-codexbrain/scripts/build_moreway_planet_dataset.py)
+- 统一刷新入口：
+  - [run_moreway_planet_refresh.py](/root/lux4-codexbrain/scripts/run_moreway_planet_refresh.py)
 - 贴图预烘焙：
   - [bake_moreway_planet_material_textures.py](/root/lux4-codexbrain/scripts/bake_moreway_planet_material_textures.py)
+- 状态检查：
+  - [check_moreway_planet_status.py](/root/lux4-codexbrain/scripts/check_moreway_planet_status.py)
 - Cloudflare 材质生成：
   - [cloudflare_flux_image_generate.py](/root/lux4-codexbrain/scripts/cloudflare_flux_image_generate.py)
   - [cloudflare_planet_material_set_experiment.py](/root/lux4-codexbrain/scripts/cloudflare_planet_material_set_experiment.py)
@@ -197,6 +201,7 @@ python3 scripts/capability_status_report.py --output-dir var/capability_status -
 
 - [moreway-planet-explorer.md](/root/lux4-codexbrain/docs/moreway-planet-explorer.md)
 - [moreway-planet-material-pipeline.md](/root/lux4-codexbrain/docs/moreway-planet-material-pipeline.md)
+- [moreway-planet-operations.md](/root/lux4-codexbrain/docs/moreway-planet-operations.md)
 
 说明：
 

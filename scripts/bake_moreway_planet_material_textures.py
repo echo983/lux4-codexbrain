@@ -14,7 +14,7 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from moreway_planet_explorer.material_bake_core import bake_texture
-from moreway_planet_explorer.material_rules import BAKE_CHANNELS, OPENAI_MATERIAL_ASSET_ROOT
+from moreway_planet_explorer.material_rules import BAKE_CHANNELS, OPENAI_MATERIAL_ASSET_ROOT, baked_texture_key
 
 MATERIAL_SOURCES = {
     "openai_materials": OPENAI_MATERIAL_ASSET_ROOT,
@@ -42,7 +42,7 @@ def bake_for_manifest(manifest_path: Path, modes: Iterable[str] | None = None) -
         if not material_root.exists():
             continue
         for channel in BAKE_CHANNELS:
-            output_key = mode if channel == "albedo" else f"{mode}_{channel}"
+            output_key = baked_texture_key(mode, channel)
             try:
                 image = bake_texture(surface_map, material_root, channel=channel)
             except FileNotFoundError:

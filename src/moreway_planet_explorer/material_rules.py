@@ -9,6 +9,11 @@ RULES_PATH = Path(__file__).resolve().parents[2] / "apps" / "moreway_planet_expl
 MATERIAL_RULES = json.loads(RULES_PATH.read_text(encoding="utf-8"))
 BAKE_CHANNELS = tuple(MATERIAL_RULES.get("bake_channels", ("albedo", "normal", "roughness")))
 OPENAI_MATERIAL_ASSET_ROOT = Path(__file__).resolve().parents[2] / "var" / "planet_material_assets" / "openai" / "v1"
+BAKE_CHANNEL_SUFFIX = {
+    "albedo": "",
+    "normal": "_normal",
+    "roughness": "_roughness",
+}
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -76,3 +81,10 @@ def compute_land_band_weights(compressed: float, rules: dict | None = None) -> d
         return {"coast": 0.0, "lowland": 1.0 - t, "upland": t, "mountain": 0.0}
     t = smoothstep(land_rules["upland_end"], 1.0, compressed)
     return {"coast": 0.0, "lowland": 0.0, "upland": 1.0 - t, "mountain": t}
+
+
+def baked_texture_key(mode: str, channel: str) -> str:
+    suffix = BAKE_CHANNEL_SUFFIX.get(channel)
+    if suffix is None:
+        raise KeyError(f"unknown bake channel: {channel}")
+    return f"{mode}{suffix}"

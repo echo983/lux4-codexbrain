@@ -1,5 +1,10 @@
 import * as THREE from 'three';
-import { BAKE_CHANNELS, OPENAI_MATERIAL_ASSET_BASE, bakedTextureKey } from './material_assets.js';
+import {
+  BAKE_CHANNELS,
+  DEFAULT_TEXTURE_MODE,
+  getBakedTextureUrls,
+  getTextureModeSpec,
+} from './material_assets.js';
 
 export function createMaterialRuntime({
   dataSetBase,
@@ -13,7 +18,7 @@ export function createMaterialRuntime({
   const textureCache = new Map();
   let baseSurfaceTexture = null;
   let openaiMaterialTextures = null;
-  let currentTextureMode = 'openai_materials';
+  let currentTextureMode = DEFAULT_TEXTURE_MODE;
 
   async function loadExternalTexture(url, { colorSpace = THREE.NoColorSpace } = {}) {
     const cacheKey = `${url}::${colorSpace}`;
@@ -35,71 +40,73 @@ export function createMaterialRuntime({
     return texture;
   }
 
-  function bakedTextureUrl(mode) {
-    const manifest = manifestRef();
-    const relative = manifest?.planet?.baked_textures?.[mode];
-    if (relative) {
-      return `${dataSetBase}/${relative}`;
+  function applyTextureSet(textureSet) {
+    BAKE_CHANNELS.forEach(({ materialProperty, channel }) => {
+      planet.material[materialProperty] = textureSet?.[channel] ?? null;
+    });
+    planet.material.needsUpdate = true;
+  }
+
+  async function loadBakedTextureSet(mode) {
+    const urls = getBakedTextureUrls({
+      dataSetBase,
+      manifest: manifestRef(),
+      mode,
+    });
+    if (!urls || !Object.values(urls).every(Boolean)) {
+      return null;
     }
-    if (!manifest?.build_id) return '';
-    return `${dataSetBase}/builds/${manifest.build_id}/textures/${mode}.png`;
+    setStatus('正在加载 OpenAI 预烘焙地表材质…');
+    const entries = await Promise.all(
+      BAKE_CHANNELS.map(async ({ channel }) => [
+        channel,
+        await loadExternalTexture(
+          urls[channel],
+          channel === 'albedo' ? { colorSpace: THREE.SRGBColorSpace } : {},
+        ),
+      ]),
+    );
+    return Object.fromEntries(entries);
+  }
+
+  async function loadTextureMode(mode) {
+    const spec = getTextureModeSpec(mode);
+    if (mode === 'surface_map') {
+      return baseSurfaceTexture ? { albedo: baseSurfaceTexture } : null;
+    }
+    const manifest = manifestRef();
+    if (!manifest?.planet?.surface_map) {
+      throw new Error('surface_map unavailable');
+    }
+    if (mode === 'openai_materials') {
+      if (!openaiMaterialTextures) {
+        openaiMaterialTextures = await loadBakedTextureSet(mode);
+        if (!openaiMaterialTextures) {
+          setStatus('正在构建 OpenAI 地表材质…');
+          const map = await buildPlanetMaterialTexture(
+            manifest.planet.surface_map,
+            spec.assetBase,
+          );
+          openaiMaterialTextures = { albedo: map };
+        }
+      }
+      return openaiMaterialTextures;
+    }
+    throw new Error(`unknown texture mode: ${mode}`);
   }
 
   async function applyPlanetTextureMode(mode) {
     currentTextureMode = mode;
     try {
-      if (mode === 'surface_map') {
-        if (baseSurfaceTexture) {
-          planet.material.map = baseSurfaceTexture;
-          planet.material.normalMap = null;
-          planet.material.roughnessMap = null;
-          planet.material.needsUpdate = true;
-        }
-        return;
-      }
-      if (mode === 'openai_materials') {
-        const manifest = manifestRef();
-        if (!manifest?.planet?.surface_map) {
-          throw new Error('surface_map unavailable');
-        }
-        if (!openaiMaterialTextures) {
-          const bakedUrls = Object.fromEntries(
-            BAKE_CHANNELS.map(({ channel }) => [channel, bakedTextureUrl(bakedTextureKey('openai_materials', channel))]),
-          );
-          if (Object.values(bakedUrls).every(Boolean)) {
-            setStatus('正在加载 OpenAI 预烘焙地表材质…');
-            const [map, normalMap, roughnessMap] = await Promise.all([
-              loadExternalTexture(bakedUrls.albedo, { colorSpace: THREE.SRGBColorSpace }),
-              loadExternalTexture(bakedUrls.normal),
-              loadExternalTexture(bakedUrls.roughness),
-            ]);
-            openaiMaterialTextures = { map, normalMap, roughnessMap };
-          } else {
-            setStatus('正在构建 OpenAI 地表材质…');
-            const map = await buildPlanetMaterialTexture(
-              manifest.planet.surface_map,
-              OPENAI_MATERIAL_ASSET_BASE,
-            );
-            openaiMaterialTextures = { map, normalMap: null, roughnessMap: null };
-          }
-        }
-        if (currentTextureMode !== mode) return;
-        planet.material.map = openaiMaterialTextures.map;
-        planet.material.normalMap = openaiMaterialTextures.normalMap;
-        planet.material.roughnessMap = openaiMaterialTextures.roughnessMap;
-        planet.material.needsUpdate = true;
-        return;
-      }
-      throw new Error(`unknown texture mode: ${mode}`);
+      const textureSet = await loadTextureMode(mode);
+      if (currentTextureMode !== mode || !textureSet) return;
+      applyTextureSet(textureSet);
     } catch (error) {
       setStatus(`OpenAI 材质不可用，已降级原始贴图：${error.message}`);
       currentTextureMode = 'surface_map';
       onFallbackMode('surface_map');
       if (baseSurfaceTexture) {
-        planet.material.map = baseSurfaceTexture;
-        planet.material.normalMap = null;
-        planet.material.roughnessMap = null;
-        planet.material.needsUpdate = true;
+        applyTextureSet({ albedo: baseSurfaceTexture });
       }
     }
   }

@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 
-import { applyPlanetSurfaceRelief, sampleSurfaceValueBilinear } from '../src/planet_surface.js';
+import {
+  applyPlanetSurfaceRelief,
+  computePointShellRadius,
+  sampleSurfaceValueBilinear,
+} from '../src/planet_surface.js';
 
 test('sampleSurfaceValueBilinear interpolates and wraps longitude', () => {
   const surfaceMap = {
@@ -43,4 +47,16 @@ test('applyPlanetSurfaceRelief adjusts geometry positions', () => {
     }
   }
   assert.equal(changed, 1);
+});
+
+test('computePointShellRadius keeps points above displaced terrain', () => {
+  const surfaceMap = {
+    lon_steps: 4,
+    lat_steps: 4,
+    land_threshold: 120,
+    values: new Array(16).fill(255),
+  };
+
+  const pointRadius = computePointShellRadius(surfaceMap, 10, 10.1);
+  assert(pointRadius > 10.2);
 });

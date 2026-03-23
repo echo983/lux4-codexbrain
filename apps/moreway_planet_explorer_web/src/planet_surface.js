@@ -1,5 +1,30 @@
 import * as THREE from 'three';
 
+export function surfaceDisplacementFromValue(surfaceMap, value) {
+  const threshold = surfaceMap.land_threshold;
+  if (value < threshold) {
+    const seaLevel = value / Math.max(threshold, 1);
+    return -0.006 * (1 - seaLevel);
+  }
+  const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
+  const compressed = Math.pow(landLevel, 1.28);
+  return 0.028 * compressed;
+}
+
+export function computePointShellRadius(surfaceMap, planetRadius, fallbackPointRadius) {
+  const values = Array.isArray(surfaceMap?.values) ? surfaceMap.values : [];
+  if (!values.length) return fallbackPointRadius;
+  let maxDisplacement = -Infinity;
+  for (const value of values) {
+    const displacement = surfaceDisplacementFromValue(surfaceMap, value);
+    if (displacement > maxDisplacement) {
+      maxDisplacement = displacement;
+    }
+  }
+  const reliefOuterRadius = planetRadius * (1 + Math.max(maxDisplacement, 0));
+  return Math.max(fallbackPointRadius, reliefOuterRadius + 0.14);
+}
+
 export function sampleSurfaceValueBilinear(surfaceMap, u, v) {
   const width = surfaceMap.lon_steps;
   const height = surfaceMap.lat_steps;
@@ -31,7 +56,6 @@ export function sampleSurfaceValueBilinear(surfaceMap, u, v) {
 export function applyPlanetSurfaceRelief(planet, planetBasePositions, surfaceMap) {
   const geometry = planet.geometry;
   const position = geometry.attributes.position;
-  const threshold = surfaceMap.land_threshold;
 
   for (let i = 0; i < position.count; i += 1) {
     const baseX = planetBasePositions[i * 3];
@@ -42,16 +66,7 @@ export function applyPlanetSurfaceRelief(planet, planetBasePositions, surfaceMap
     const u = 0.5 + Math.atan2(baseVec.z, baseVec.x) / (Math.PI * 2);
     const v = 0.5 - Math.asin(THREE.MathUtils.clamp(baseVec.y, -1, 1)) / Math.PI;
     const value = sampleSurfaceValueBilinear(surfaceMap, u, v);
-
-    let displacement = 0;
-    if (value < threshold) {
-      const seaLevel = value / Math.max(threshold, 1);
-      displacement = -0.006 * (1 - seaLevel);
-    } else {
-      const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
-      const compressed = Math.pow(landLevel, 1.28);
-      displacement = 0.028 * compressed;
-    }
+    const displacement = surfaceDisplacementFromValue(surfaceMap, value);
 
     const scale = 1 + displacement;
     position.setXYZ(i, baseVec.x * scale, baseVec.y * scale, baseVec.z * scale);

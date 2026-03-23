@@ -3,11 +3,14 @@ import * as THREE from 'three';
 export function createFocusSystem({
   scene,
   camera,
+  controls,
   renderer,
   overlayLayerEl,
   focusRegionBoxEl,
   pointMeshes,
   starTexture,
+  planet,
+  basePointSize,
   getSelectedPayload,
   onResultsChanged,
 }) {
@@ -17,10 +20,54 @@ export function createFocusSystem({
   let focusResultHistory = new Map();
   let focusResultsSignature = '';
 
+  function buildCrossTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 64, 64);
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(32, 14);
+    ctx.lineTo(32, 50);
+    ctx.moveTo(14, 32);
+    ctx.lineTo(50, 32);
+    ctx.stroke();
+    const glow = ctx.createRadialGradient(32, 32, 0, 32, 32, 24);
+    glow.addColorStop(0, 'rgba(255,255,255,0.28)');
+    glow.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, 64, 64);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  function zoomProfile() {
+    const distance = camera.position.length();
+    const normalized = THREE.MathUtils.clamp((distance - 14) / 46, 0, 1);
+    const curved = Math.pow(normalized, 2.6);
+    return {
+      labelOffsetY: THREE.MathUtils.lerp(16, 1, curved),
+      pointZoneRadius: THREE.MathUtils.lerp(24, 14, normalized),
+    };
+  }
+
+  function currentPointSize() {
+    const distance = controls.getDistance();
+    const span = Math.max(controls.maxDistance - controls.minDistance, 0.001);
+    const normalized = THREE.MathUtils.clamp((distance - controls.minDistance) / span, 0, 1);
+    const eased = normalized * normalized * (3 - 2 * normalized);
+    const pointSizeScale = THREE.MathUtils.lerp(0.72, 2.35, Math.pow(eased, 0.85));
+    return basePointSize * pointSizeScale;
+  }
+
   const topFocusHighlight = new THREE.Points(
     new THREE.BufferGeometry(),
     new THREE.PointsMaterial({
-      size: 0.22,
+      size: 0.18,
       transparent: true,
       opacity: 1,
       map: starTexture,
@@ -36,7 +83,7 @@ export function createFocusSystem({
   const topFocusGlow = new THREE.Points(
     new THREE.BufferGeometry(),
     new THREE.PointsMaterial({
-      size: 0.42,
+      size: 0.3,
       transparent: true,
       opacity: 0.45,
       map: starTexture,
@@ -48,6 +95,44 @@ export function createFocusSystem({
   );
   topFocusGlow.visible = false;
   scene.add(topFocusGlow);
+
+  const crossTexture = buildCrossTexture();
+  const topFocusCross = new THREE.Points(
+    new THREE.BufferGeometry(),
+    new THREE.PointsMaterial({
+      size: 0.26,
+      transparent: true,
+      opacity: 0.3,
+      map: crossTexture,
+      alphaMap: crossTexture,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      color: 0xb9bbff,
+    }),
+  );
+  topFocusCross.visible = false;
+  scene.add(topFocusCross);
+
+  function isWorldPointFrontFacing(worldPoint) {
+    const cameraHemisphere = camera.position.clone().normalize();
+    const surfaceNormal = worldPoint.clone().normalize();
+    return surfaceNormal.dot(cameraHemisphere) > 0.0;
+  }
+
+  function isOccludedByPlanet(worldPoint) {
+    const planetRadius = planet.scale.x;
+    const cameraPos = camera.position.clone();
+    const toPoint = worldPoint.clone().sub(cameraPos);
+    const segLenSq = toPoint.lengthSq();
+    if (segLenSq <= 1e-9) return false;
+    const t = THREE.MathUtils.clamp(-cameraPos.dot(toPoint) / segLenSq, 0, 1);
+    const closest = cameraPos.add(toPoint.multiplyScalar(t));
+    return closest.lengthSq() < (planetRadius * planetRadius);
+  }
+
+  function isWorldPointVisible(worldPoint) {
+    return isWorldPointFrontFacing(worldPoint) && !isOccludedByPlanet(worldPoint);
+  }
 
   function ensureFocusLabelPool(size) {
     while (focusLabelEls.length < size) {
@@ -62,7 +147,6 @@ export function createFocusSystem({
   function updateFocusResults() {
     const center = new THREE.Vector2(0, 0);
     const candidates = [];
-    const cameraHemisphere = camera.position.clone().normalize();
     const focusRect = focusRegionBoxEl.getBoundingClientRect();
     const canvasRect = renderer.domElement.getBoundingClientRect();
     const focusLeft = focusRect.left - canvasRect.left;
@@ -79,8 +163,7 @@ export function createFocusSystem({
           positions.getY(index),
           positions.getZ(index),
         );
-        const surfaceNormal = world.clone().normalize();
-        if (surfaceNormal.dot(cameraHemisphere) <= 0.0) continue;
+        if (!isWorldPointVisible(world)) continue;
         const projected = world.clone().project(camera);
         if (projected.z < -1 || projected.z > 1) continue;
         if (Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1) continue;
@@ -135,16 +218,17 @@ export function createFocusSystem({
   function updateFocusLabels() {
     ensureFocusLabelPool(focusLabelEntries.length);
     const canvasRect = renderer.domElement.getBoundingClientRect();
+    const { labelOffsetY, pointZoneRadius } = zoomProfile();
     const occupiedRects = [];
     const occupiedPointZones = focusLabelEntries.map((entry) => {
       const projected = entry.position.clone().project(camera);
       const screenX = canvasRect.left + ((projected.x + 1) / 2) * canvasRect.width;
       const screenY = canvasRect.top + ((-projected.y + 1) / 2) * canvasRect.height;
       return {
-        left: screenX - 18,
-        right: screenX + 18,
-        top: screenY - 18,
-        bottom: screenY + 18,
+        left: screenX - pointZoneRadius,
+        right: screenX + pointZoneRadius,
+        top: screenY - pointZoneRadius,
+        bottom: screenY + pointZoneRadius,
       };
     });
     for (let i = 0; i < focusLabelEls.length; i += 1) {
@@ -156,7 +240,8 @@ export function createFocusSystem({
       }
 
       const projected = entry.position.clone().project(camera);
-      const visible = projected.z >= -1 && projected.z <= 1
+      const visible = isWorldPointVisible(entry.position)
+        && projected.z >= -1 && projected.z <= 1
         && Math.abs(projected.x) <= 1
         && Math.abs(projected.y) <= 1;
       if (!visible) {
@@ -169,8 +254,9 @@ export function createFocusSystem({
       const title = entry.payload.title || entry.payload.path_in_snapshot || entry.payload.doc_id || 'Untitled';
       labelEl.textContent = title;
       labelEl.classList.toggle('is-primary', i === 0);
+      const labelTop = screenY + labelOffsetY;
       labelEl.style.left = `${screenX}px`;
-      labelEl.style.top = `${screenY}px`;
+      labelEl.style.top = `${labelTop}px`;
       labelEl.style.display = 'block';
 
       const width = labelEl.offsetWidth || 120;
@@ -178,8 +264,8 @@ export function createFocusSystem({
       const labelRect = {
         left: screenX - width / 2,
         right: screenX + width / 2,
-        top: screenY + 26,
-        bottom: screenY + 26 + height,
+        top: labelTop,
+        bottom: labelTop + height,
       };
       const overlapsLabels = occupiedRects.some((other) => !(
         labelRect.right < other.left ||
@@ -193,14 +279,8 @@ export function createFocusSystem({
         labelRect.bottom < other.top ||
         labelRect.top > other.bottom
       ));
-      const overlapsOwnPoint = !(
-        labelRect.right < occupiedPointZones[i].left ||
-        labelRect.left > occupiedPointZones[i].right ||
-        labelRect.bottom < occupiedPointZones[i].top ||
-        labelRect.top > occupiedPointZones[i].bottom
-      );
       const isPrimary = i === 0;
-      if (!isPrimary && (overlapsLabels || overlapsPoints || overlapsOwnPoint)) {
+      if (!isPrimary && (overlapsLabels || overlapsPoints)) {
         labelEl.style.display = 'none';
         continue;
       }
@@ -211,9 +291,10 @@ export function createFocusSystem({
 
   function updateTopFocusHighlight() {
     const top = focusResults[0];
-    if (!top) {
+    if (!top || !isWorldPointVisible(top.position)) {
       topFocusHighlight.visible = false;
       topFocusGlow.visible = false;
+      topFocusCross.visible = false;
       return;
     }
     const geometry = topFocusHighlight.geometry;
@@ -237,9 +318,36 @@ export function createFocusSystem({
     );
     glowGeometry.computeBoundingSphere();
     topFocusGlow.visible = true;
-    const glowPulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.008);
-    topFocusGlow.material.size = 0.34 + 0.18 * glowPulse;
-    topFocusGlow.material.opacity = 0.18 + 0.24 * (0.5 + 0.5 * Math.sin(performance.now() * 0.012));
+    const crossGeometry = topFocusCross.geometry;
+    crossGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(
+        [top.position.x, top.position.y, top.position.z],
+        3,
+      ),
+    );
+    crossGeometry.computeBoundingSphere();
+    topFocusCross.visible = true;
+    const baseSize = currentPointSize();
+    const highlightSize = baseSize * 1.5;
+    const breathe = 0.5 + 0.5 * Math.sin(performance.now() * 0.0032);
+    topFocusHighlight.material.size = highlightSize;
+    topFocusGlow.material.size = highlightSize * (1.18 + 0.62 * breathe);
+    topFocusGlow.material.opacity = 0.14 + 0.34 * breathe;
+    const glowColor = new THREE.Color().lerpColors(
+      new THREE.Color(0xfff0be),
+      new THREE.Color(0x7e7cff),
+      0.2 + 0.8 * breathe,
+    );
+    topFocusGlow.material.color.copy(glowColor);
+    topFocusCross.material.size = highlightSize * (0.82 + 0.2 * breathe);
+    topFocusCross.material.opacity = 0.14 + 0.24 * breathe;
+    const crossColor = new THREE.Color().lerpColors(
+      new THREE.Color(0xd2d6ff),
+      new THREE.Color(0x858cff),
+      0.35 + 0.65 * breathe,
+    );
+    topFocusCross.material.color.copy(crossColor);
   }
 
   return {
@@ -247,5 +355,6 @@ export function createFocusSystem({
     updateFocusLabels,
     updateTopFocusHighlight,
     getFocusResults: () => focusResults,
+    isWorldPointVisible,
   };
 }

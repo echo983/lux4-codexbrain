@@ -25,6 +25,7 @@ import {
 import {
   applyPlanetSurfaceRelief,
   buildPlanetTexture,
+  computePointShellRadius,
 } from './planet_surface.js';
 
 const statusEl = document.getElementById('status');
@@ -48,7 +49,7 @@ const {
   planetBasePositions,
 } = createSceneRuntime(sceneRoot);
 
-function deriveDisplayRadii(bounds) {
+function deriveDisplayRadii(bounds, surfaceMap = null) {
   const [minX, minY, minZ] = bounds.min;
   const [maxX, maxY, maxZ] = bounds.max;
   const corners = [
@@ -66,8 +67,10 @@ function deriveDisplayRadii(bounds) {
     const radius = Math.sqrt(x * x + y * y + z * z);
     if (radius > maxRadius) maxRadius = radius;
   }
-  pointRadius = maxRadius;
   planetRadius = Math.max(0.1, maxRadius - 0.08);
+  pointRadius = surfaceMap
+    ? computePointShellRadius(surfaceMap, planetRadius, maxRadius)
+    : maxRadius;
   updatePlanetScale(planet, atmosphere, planetRadius);
   updateControlBounds(camera, controls, planetRadius, pointRadius);
 }
@@ -126,11 +129,14 @@ let currentTextureMode = DEFAULT_TEXTURE_MODE;
 const focusSystem = createFocusSystem({
   scene,
   camera,
+  controls,
   renderer,
   overlayLayerEl,
   focusRegionBoxEl,
   pointMeshes,
   starTexture,
+  planet,
+  basePointSize: BASE_POINT_SIZE,
   getSelectedPayload: () => selectedPayload,
   onResultsChanged: () => {
     resultsPanel.renderFocusResults(focusSystem.getFocusResults());
@@ -159,7 +165,7 @@ async function bootstrap() {
   try {
     const latest = await loadJson(`${DATASET_BASE}/latest.json`);
     manifest = await loadJson(`${DATASET_BASE}/${latest.manifest_path}`);
-    deriveDisplayRadii(manifest.bounds);
+    deriveDisplayRadii(manifest.bounds, manifest.planet?.surface_map || null);
     if (manifest.planet?.surface_map) {
       applyPlanetSurfaceRelief(planet, planetBasePositions, manifest.planet.surface_map);
       const baseSurfaceTexture = buildPlanetTexture(manifest.planet.surface_map);
@@ -197,9 +203,14 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     setSelection(null);
     return;
   }
-  const hit = intersects[0];
-  const index = hit.index;
-  const payload = hit.object.userData.payloads?.[index];
+  let payload = null;
+  for (const hit of intersects) {
+    const index = hit.index;
+    const worldPoint = hit.point.clone();
+    if (!focusSystem.isWorldPointVisible(worldPoint)) continue;
+    payload = hit.object.userData.payloads?.[index] || null;
+    if (payload) break;
+  }
   setSelection(payload || null);
 });
 

@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Iterable
-
-from src.moreway_planet_explorer.material_bake_core import bake_texture
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATASET_ROOT = REPO_ROOT / "var" / "moreway_planet_dataset"
 
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from moreway_planet_explorer.material_bake_core import bake_texture
+from moreway_planet_explorer.material_rules import BAKE_CHANNELS, OPENAI_MATERIAL_ASSET_ROOT
+
 MATERIAL_SOURCES = {
-    "openai_materials": REPO_ROOT / "var" / "openai_image_experiments" / "materials",
+    "openai_materials": OPENAI_MATERIAL_ASSET_ROOT,
 }
 
 
@@ -37,10 +41,15 @@ def bake_for_manifest(manifest_path: Path, modes: Iterable[str] | None = None) -
         material_root = MATERIAL_SOURCES[mode]
         if not material_root.exists():
             continue
-        image = bake_texture(surface_map, material_root)
-        output_path = textures_dir / f"{mode}.png"
-        image.save(output_path)
-        baked[mode] = str(output_path.relative_to(build_dir.parent.parent))
+        for channel in BAKE_CHANNELS:
+            output_key = mode if channel == "albedo" else f"{mode}_{channel}"
+            try:
+                image = bake_texture(surface_map, material_root, channel=channel)
+            except FileNotFoundError:
+                continue
+            output_path = textures_dir / f"{output_key}.png"
+            image.save(output_path)
+            baked[output_key] = str(output_path.relative_to(build_dir.parent.parent))
     manifest.setdefault("planet", {})["baked_textures"] = baked
     write_manifest(manifest_path, manifest)
     return baked

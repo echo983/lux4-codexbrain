@@ -1,6 +1,25 @@
 {
   "variant_count": 3,
   "texture_scale": 12,
+  "bake_channels": [
+    "albedo",
+    "normal",
+    "roughness"
+  ],
+  "raw_palette": {
+    "deep_ocean": [6, 22, 64],
+    "mid_ocean": [18, 66, 128],
+    "shallow_ocean": [72, 126, 178],
+    "coastal_water": [120, 170, 196],
+    "coast_wet": [176, 176, 132],
+    "coast_dry": [201, 181, 129],
+    "lowland_grass": [86, 122, 74],
+    "lowland_forest": [62, 104, 68],
+    "upland_temperate": [118, 104, 76],
+    "upland_dry": [145, 125, 86],
+    "mountain_rock": [148, 142, 138],
+    "mountain_snow": [232, 238, 244]
+  },
   "polar": {
     "blend_start": 0.72,
     "blend_end": 0.96,
@@ -9,7 +28,9 @@
     "extent": 0.28
   },
   "ocean": {
-    "transition": 0.58,
+    "deep_end": 0.26,
+    "mid_end": 0.56,
+    "shallow_end": 0.82,
     "detail_mix": 0.44,
     "detail_amount": 0.16,
     "tone": {
@@ -20,11 +41,39 @@
   },
   "land": {
     "exponent": 1.55,
-    "coast_end": 0.18,
-    "lowland_end": 0.58,
-    "upland_end": 0.86,
+    "coast_end": 0.12,
+    "lowland_end": 0.72,
+    "upland_end": 0.9,
     "detail_mix": 0.48,
     "detail_amount": 0.28,
+    "ecology": {
+      "moisture_base": 0.62,
+      "moisture_latitude_penalty": 0.42,
+      "moisture_distortion_penalty": 0.12,
+      "moisture_lowland_bonus": 0.16,
+      "moisture_wave_u": 3.2,
+      "moisture_wave_v": 1.4,
+      "moisture_wave_amplitude": 0.08,
+      "dryness_height_bonus": 0.12,
+      "vegetation_moisture_scale": 0.86,
+      "vegetation_latitude_bonus": 0.16,
+      "vegetation_height_penalty": 0.1,
+      "vegetation_blend_start": 0.28,
+      "vegetation_blend_end": 0.72,
+      "coldness_latitude_scale": 0.82,
+      "coldness_height_bonus": 0.22,
+      "coldness_moisture_penalty": 0.12,
+      "snow_blend_start": 0.48,
+      "snow_blend_end": 0.9,
+      "coast_offset_u": 0.031,
+      "coast_offset_v": -0.017,
+      "lowland_offset_u": -0.024,
+      "lowland_offset_v": 0.019,
+      "upland_offset_u": 0.021,
+      "upland_offset_v": -0.029,
+      "mountain_offset_u": -0.018,
+      "mountain_offset_v": 0.014
+    },
     "tone": {
       "saturation": 1.12,
       "gain": 1.07,

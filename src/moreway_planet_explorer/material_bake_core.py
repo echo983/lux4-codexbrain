@@ -1,16 +1,33 @@
 from __future__ import annotations
 
 import math
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
 
-
-RULES_PATH = Path(__file__).resolve().parents[2] / "apps" / "moreway_planet_explorer_web" / "src" / "material_rules.json"
-MATERIAL_RULES = json.loads(RULES_PATH.read_text(encoding="utf-8"))
-PRIMARY_KEYS = ["deep_ocean", "shallow_ocean", "coast", "lowland", "upland", "mountain_snow"]
+from .material_rules import (
+    MATERIAL_RULES,
+    clamp,
+    compute_distortion,
+    compute_land_band_weights,
+    compute_land_ecology,
+    smoothstep,
+)
+PRIMARY_KEYS = [
+    "deep_ocean",
+    "mid_ocean",
+    "shallow_ocean",
+    "coastal_water",
+    "coast_wet",
+    "coast_dry",
+    "lowland_grass",
+    "lowland_forest",
+    "upland_temperate",
+    "upland_dry",
+    "mountain_rock",
+    "mountain_snow",
+]
 
 
 @dataclass(frozen=True)
@@ -32,17 +49,6 @@ class PixelContext:
     broad_u2: float
     broad_v2: float
     distortion: float
-
-
-def clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
-
-def smoothstep(edge0: float, edge1: float, x: float) -> float:
-    t = clamp((x - edge0) / max(edge1 - edge0, 1e-6), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
-
-
 def blend_rgb(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
     return tuple(round(a[idx] + (b[idx] - a[idx]) * t) for idx in range(3))
 
@@ -59,7 +65,7 @@ def tune_material_color(rgb: tuple[int, int, int], *, saturation: float, gain: f
     luma = luminance(rgb) * 255.0
     lifted = [channel * gain + lift for channel in rgb]
     tuned = [luma + (channel - luma) * saturation for channel in lifted]
-    return tuple(max(0, min(255), round(channel)) for channel in tuned)
+    return tuple(max(0, min(255, round(channel))) for channel in tuned)
 
 
 def apply_material_detail(base_rgb: tuple[int, int, int], detail_rgb: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
@@ -91,11 +97,20 @@ def sample_surface_value(surface_map: dict, u: float, v: float) -> float:
     return top + (bottom - top) * ty
 
 
-def load_variants(material_root: Path, key: str, variant_count: int) -> list[Image.Image]:
+def load_variants(material_root: Path, key: str, variant_count: int, channel: str = "albedo") -> list[Image.Image]:
     variants: list[Image.Image] = []
+    family_dir = material_root / key
     for index in range(variant_count):
-        suffix = "" if index == 0 else f"_{index + 1:02d}"
-        path = material_root / f"{key}{suffix}.png"
+        numeric_suffix = f"_{index + 1:02d}"
+        if family_dir.is_dir():
+            path = family_dir / f"{channel}{numeric_suffix}.png"
+        else:
+            if channel != "albedo":
+                if index == 0:
+                    raise FileNotFoundError(family_dir / f"{channel}{numeric_suffix}.png")
+                continue
+            suffix = "" if index == 0 else f"_{index + 1:02d}"
+            path = material_root / f"{key}{suffix}.png"
         if not path.exists():
             if index == 0:
                 raise FileNotFoundError(path)
@@ -104,10 +119,16 @@ def load_variants(material_root: Path, key: str, variant_count: int) -> list[Ima
     return variants
 
 
-def load_material_bundle(material_root: Path) -> tuple[dict[str, list[Image.Image]], Image.Image, Image.Image]:
-    loaded = {key: load_variants(material_root, key, int(MATERIAL_RULES["variant_count"])) for key in PRIMARY_KEYS}
-    north_pole = load_variants(material_root, "north_pole", 1)[0]
-    south_pole = load_variants(material_root, "south_pole", 1)[0]
+def load_material_bundle(
+    material_root: Path,
+    channel: str = "albedo",
+) -> tuple[dict[str, list[Image.Image]], list[Image.Image], list[Image.Image]]:
+    loaded = {
+        key: load_variants(material_root, key, int(MATERIAL_RULES["variant_count"]), channel=channel)
+        for key in PRIMARY_KEYS
+    }
+    north_pole = load_variants(material_root, "north_pole", int(MATERIAL_RULES["variant_count"]), channel=channel)
+    south_pole = load_variants(material_root, "south_pole", int(MATERIAL_RULES["variant_count"]), channel=channel)
     return loaded, north_pole, south_pole
 
 
@@ -171,8 +192,8 @@ def build_pixel_context(
     y: int,
     width: int,
     height: int,
-    north_pole: Image.Image,
-    south_pole: Image.Image,
+    north_pole: list[Image.Image],
+    south_pole: list[Image.Image],
 ) -> PixelContext:
     su = x / width
     sv = y / height
@@ -186,7 +207,7 @@ def build_pixel_context(
     polar_theta = su * math.pi * 2.0
     polar_u = 0.5 + math.cos(polar_theta) * polar_radius * 0.5
     polar_v = 0.5 + math.sin(polar_theta) * polar_radius * 0.5
-    pole_rgb = sample_image_bilinear(north_pole if is_north else south_pole, polar_u, polar_v)
+    pole_rgb = sample_material(north_pole if is_north else south_pole, polar_u, polar_v, 0.0)
     detail_u = su * 6.5 + sv * 0.7
     detail_v = sv * 4.5 + su * 0.35
     detail_u2 = su * 12.0 - sv * 0.9
@@ -197,10 +218,7 @@ def build_pixel_context(
     broad_v = sv * 1.4 + su * 0.08
     broad_u2 = su * 2.4 - sv * 0.18
     broad_v2 = sv * 2.0 + su * 0.11
-    distortion = (
-        math.sin((su * 7.0 + sv * 3.0) * math.pi * 2.0) * 0.5
-        + math.cos((su * 4.0 - sv * 5.0) * math.pi * 2.0) * 0.5
-    )
+    distortion = compute_distortion(su, sv)
     return PixelContext(
         su=su,
         sv=sv,
@@ -226,126 +244,177 @@ def bake_ocean_rgb(
     loaded: dict[str, list[Image.Image]],
     threshold: float,
     ctx: PixelContext,
+    channel: str = "albedo",
 ) -> tuple[int, int, int]:
     sea_level = ctx.value / max(threshold, 1.0)
     ocean_rules = MATERIAL_RULES["ocean"]
-    ocean_detail = (
-        sample_material(loaded["deep_ocean"], ctx.detail_u, ctx.detail_v, ctx.distortion)
-        if sea_level < ocean_rules["transition"]
-        else blend_rgb(
-            sample_material(loaded["deep_ocean"], ctx.detail_u, ctx.detail_v, ctx.distortion),
-            sample_material(loaded["shallow_ocean"], ctx.detail_u2, ctx.detail_v2, ctx.distortion),
-            smoothstep(ocean_rules["transition"], 1.0, sea_level),
+    def sample_ocean_family(u1: float, v1: float, u2: float, v2: float, distortion: float) -> tuple[int, int, int]:
+        if sea_level < ocean_rules["deep_end"]:
+            return sample_material(loaded["deep_ocean"], u1, v1, distortion)
+        if sea_level < ocean_rules["mid_end"]:
+            return blend_rgb(
+                sample_material(loaded["deep_ocean"], u1, v1, distortion),
+                sample_material(loaded["mid_ocean"], u2, v2, distortion),
+                smoothstep(ocean_rules["deep_end"], ocean_rules["mid_end"], sea_level),
+            )
+        if sea_level < ocean_rules["shallow_end"]:
+            return blend_rgb(
+                sample_material(loaded["mid_ocean"], u1, v1, distortion),
+                sample_material(loaded["shallow_ocean"], u2, v2, distortion),
+                smoothstep(ocean_rules["mid_end"], ocean_rules["shallow_end"], sea_level),
+            )
+        return blend_rgb(
+            sample_material(loaded["shallow_ocean"], u1, v1, distortion),
+            sample_material(loaded["coastal_water"], u2, v2, distortion),
+            smoothstep(ocean_rules["shallow_end"], 1.0, sea_level),
         )
-    )
-    ocean_micro = (
-        sample_material(loaded["deep_ocean"], ctx.micro_u, ctx.micro_v, ctx.distortion * 1.3)
-        if sea_level < ocean_rules["transition"]
-        else blend_rgb(
-            sample_material(loaded["deep_ocean"], ctx.micro_u, ctx.micro_v, ctx.distortion * 1.3),
-            sample_material(loaded["shallow_ocean"], ctx.micro_v, ctx.micro_u, ctx.distortion * 1.3),
-            smoothstep(ocean_rules["transition"], 1.0, sea_level),
-        )
-    )
-    broad_rgb = (
-        sample_material(loaded["deep_ocean"], ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5)
-        if sea_level < ocean_rules["transition"]
-        else blend_rgb(
-            sample_material(loaded["deep_ocean"], ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5),
-            sample_material(loaded["shallow_ocean"], ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5),
-            smoothstep(ocean_rules["transition"], 1.0, sea_level),
-        )
-    )
+
+    ocean_detail = sample_ocean_family(ctx.detail_u, ctx.detail_v, ctx.detail_u2, ctx.detail_v2, ctx.distortion)
+    ocean_micro = sample_ocean_family(ctx.micro_u, ctx.micro_v, ctx.micro_v, ctx.micro_u, ctx.distortion * 1.3)
+    broad_rgb = sample_ocean_family(ctx.broad_u, ctx.broad_v, ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5)
     rgb = blend_rgb(broad_rgb, ocean_detail, ocean_rules["detail_mix"])
-    rgb = apply_material_detail(rgb, ocean_micro, ocean_rules["detail_amount"])
-    if ctx.polar_blend > 0.0:
-        rgb = blend_rgb(rgb, broad_rgb, ctx.polar_blend * 0.9)
-    if ctx.polar_cap_blend > 0.05:
-        icy_ocean = blend_rgb(broad_rgb, (220, 235, 245), ctx.polar_cap_blend * 0.45)
-        rgb = blend_rgb(rgb, icy_ocean, ctx.polar_cap_blend * 0.65)
-    if ctx.polar_blend > 0.08:
-        rgb = blend_rgb(rgb, ctx.pole_rgb, ctx.polar_blend * 0.82)
-    return tune_material_color(rgb, **ocean_rules["tone"])
+    if channel == "albedo":
+        rgb = apply_material_detail(rgb, ocean_micro, ocean_rules["detail_amount"])
+        if ctx.polar_blend > 0.0:
+            rgb = blend_rgb(rgb, broad_rgb, ctx.polar_blend * 0.9)
+        if ctx.polar_cap_blend > 0.05:
+            icy_ocean = blend_rgb(broad_rgb, (220, 235, 245), ctx.polar_cap_blend * 0.45)
+            rgb = blend_rgb(rgb, icy_ocean, ctx.polar_cap_blend * 0.65)
+        if ctx.polar_blend > 0.08:
+            rgb = blend_rgb(rgb, ctx.pole_rgb, ctx.polar_blend * 0.82)
+        return tune_material_color(rgb, **ocean_rules["tone"])
+    rgb = blend_rgb(rgb, ocean_micro, ocean_rules["detail_amount"] * 0.55)
+    if ctx.polar_blend > 0.05:
+        rgb = blend_rgb(rgb, ctx.pole_rgb, ctx.polar_blend * 0.72)
+    if ctx.polar_cap_blend > 0.1:
+        rgb = blend_rgb(rgb, ctx.pole_rgb, ctx.polar_cap_blend * 0.45)
+    return rgb
 
 
 def bake_land_rgb(
     loaded: dict[str, list[Image.Image]],
     threshold: float,
     ctx: PixelContext,
+    channel: str = "albedo",
 ) -> tuple[int, int, int]:
     land_rules = MATERIAL_RULES["land"]
     land_level = (ctx.value - threshold) / max(255.0 - threshold, 1.0)
     compressed = land_level ** land_rules["exponent"]
-    if compressed < land_rules["coast_end"]:
-        detail_rgb = sample_material(loaded["coast"], ctx.detail_u, ctx.detail_v, ctx.distortion)
-        micro_rgb = sample_material(loaded["coast"], ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15)
-        broad_rgb = sample_material(loaded["coast"], ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5)
-    elif compressed < land_rules["lowland_end"]:
-        t = smoothstep(land_rules["coast_end"], land_rules["lowland_end"], compressed)
+    ecology = compute_land_ecology(ctx.su, ctx.sv, compressed, ctx.distortion, MATERIAL_RULES)
+    dryness = ecology["dryness"]
+    vegetation = ecology["vegetation"]
+    coldness = ecology["coldness"]
+    ecology_rules = land_rules["ecology"]
+
+    def sample_coast(u: float, v: float, distortion: float) -> tuple[int, int, int]:
+        return blend_rgb(
+            sample_material(loaded["coast_wet"], u, v, distortion),
+            sample_material(loaded["coast_dry"], u + ecology_rules["coast_offset_u"], v + ecology_rules["coast_offset_v"], distortion),
+            dryness,
+        )
+
+    def sample_lowland(u: float, v: float, distortion: float) -> tuple[int, int, int]:
+        forest_weight = smoothstep(ecology_rules["vegetation_blend_start"], ecology_rules["vegetation_blend_end"], vegetation)
+        return blend_rgb(
+            sample_material(loaded["lowland_grass"], u, v, distortion),
+            sample_material(loaded["lowland_forest"], u + ecology_rules["lowland_offset_u"], v + ecology_rules["lowland_offset_v"], distortion),
+            forest_weight,
+        )
+
+    def sample_upland(u: float, v: float, distortion: float) -> tuple[int, int, int]:
+        return blend_rgb(
+            sample_material(loaded["upland_temperate"], u, v, distortion),
+            sample_material(loaded["upland_dry"], u + 0.021, v - 0.029, distortion),
+            smoothstep(0.32, 0.78, dryness),
+        )
+
+    def sample_mountain(u: float, v: float, distortion: float) -> tuple[int, int, int]:
+        snow_weight = smoothstep(
+            ecology_rules["snow_blend_start"],
+            ecology_rules["snow_blend_end"],
+            coldness + compressed * ecology_rules["coldness_height_bonus"],
+        )
+        return blend_rgb(
+            sample_material(loaded["mountain_rock"], u, v, distortion),
+            sample_material(loaded["mountain_snow"], u + ecology_rules["mountain_offset_u"], v + ecology_rules["mountain_offset_v"], distortion),
+            snow_weight,
+        )
+
+    weights = compute_land_band_weights(compressed, MATERIAL_RULES)
+    if weights["coast"] == 1.0:
+        detail_rgb = sample_coast(ctx.detail_u, ctx.detail_v, ctx.distortion)
+        micro_rgb = sample_coast(ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15)
+        broad_rgb = sample_coast(ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5)
+    elif weights["coast"] > 0.0 and weights["lowland"] > 0.0:
         detail_rgb = blend_rgb(
-            sample_material(loaded["coast"], ctx.detail_u, ctx.detail_v, ctx.distortion),
-            sample_material(loaded["lowland"], ctx.detail_u2, ctx.detail_v2, ctx.distortion),
-            t,
+            sample_coast(ctx.detail_u, ctx.detail_v, ctx.distortion),
+            sample_lowland(ctx.detail_u2, ctx.detail_v2, ctx.distortion),
+            weights["lowland"],
         )
         micro_rgb = blend_rgb(
-            sample_material(loaded["coast"], ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15),
-            sample_material(loaded["lowland"], ctx.micro_v, ctx.micro_u, ctx.distortion * 1.15),
-            t,
+            sample_coast(ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15),
+            sample_lowland(ctx.micro_v, ctx.micro_u, ctx.distortion * 1.15),
+            weights["lowland"],
         )
         broad_rgb = blend_rgb(
-            sample_material(loaded["coast"], ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5),
-            sample_material(loaded["lowland"], ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5),
-            t,
+            sample_coast(ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5),
+            sample_lowland(ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5),
+            weights["lowland"],
         )
-    elif compressed < land_rules["upland_end"]:
-        t = smoothstep(land_rules["lowland_end"], land_rules["upland_end"], compressed)
+    elif weights["lowland"] > 0.0 and weights["upland"] > 0.0:
         detail_rgb = blend_rgb(
-            sample_material(loaded["lowland"], ctx.detail_u, ctx.detail_v, ctx.distortion),
-            sample_material(loaded["upland"], ctx.detail_u2, ctx.detail_v2, ctx.distortion),
-            t,
+            sample_lowland(ctx.detail_u, ctx.detail_v, ctx.distortion),
+            sample_upland(ctx.detail_u2, ctx.detail_v2, ctx.distortion),
+            weights["upland"],
         )
         micro_rgb = blend_rgb(
-            sample_material(loaded["lowland"], ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15),
-            sample_material(loaded["upland"], ctx.micro_v, ctx.micro_u, ctx.distortion * 1.15),
-            t,
+            sample_lowland(ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15),
+            sample_upland(ctx.micro_v, ctx.micro_u, ctx.distortion * 1.15),
+            weights["upland"],
         )
         broad_rgb = blend_rgb(
-            sample_material(loaded["lowland"], ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5),
-            sample_material(loaded["upland"], ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5),
-            t,
+            sample_lowland(ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5),
+            sample_upland(ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5),
+            weights["upland"],
         )
     else:
-        t = smoothstep(land_rules["upland_end"], 1.0, compressed)
         detail_rgb = blend_rgb(
-            sample_material(loaded["upland"], ctx.detail_u, ctx.detail_v, ctx.distortion),
-            sample_material(loaded["mountain_snow"], ctx.detail_u2, ctx.detail_v2, ctx.distortion),
-            t,
+            sample_upland(ctx.detail_u, ctx.detail_v, ctx.distortion),
+            sample_mountain(ctx.detail_u2, ctx.detail_v2, ctx.distortion),
+            weights["mountain"],
         )
         micro_rgb = blend_rgb(
-            sample_material(loaded["upland"], ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15),
-            sample_material(loaded["mountain_snow"], ctx.micro_v, ctx.micro_u, ctx.distortion * 1.15),
-            t,
+            sample_upland(ctx.micro_u, ctx.micro_v, ctx.distortion * 1.15),
+            sample_mountain(ctx.micro_v, ctx.micro_u, ctx.distortion * 1.15),
+            weights["mountain"],
         )
         broad_rgb = blend_rgb(
-            sample_material(loaded["upland"], ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5),
-            sample_material(loaded["mountain_snow"], ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5),
-            t,
+            sample_upland(ctx.broad_u, ctx.broad_v, ctx.distortion * 0.5),
+            sample_mountain(ctx.broad_u2, ctx.broad_v2, ctx.distortion * 0.5),
+            weights["mountain"],
         )
     rgb = blend_rgb(broad_rgb, detail_rgb, land_rules["detail_mix"])
-    rgb = apply_material_detail(rgb, micro_rgb, land_rules["detail_amount"])
-    if ctx.polar_blend > 0.0:
-        rgb = blend_rgb(rgb, broad_rgb, ctx.polar_blend * 0.92)
-    if ctx.polar_cap_blend > 0.05:
-        snow_cap = blend_rgb(broad_rgb, (242, 246, 250), ctx.polar_cap_blend * 0.88)
-        rgb = blend_rgb(rgb, snow_cap, ctx.polar_cap_blend * 0.72)
-    if ctx.polar_blend > 0.08:
-        polar_land = blend_rgb(ctx.pole_rgb, broad_rgb, 0.22)
-        rgb = blend_rgb(rgb, polar_land, ctx.polar_blend * 0.88)
-    return tune_material_color(rgb, **land_rules["tone"])
+    if channel == "albedo":
+        rgb = apply_material_detail(rgb, micro_rgb, land_rules["detail_amount"])
+        if ctx.polar_blend > 0.0:
+            rgb = blend_rgb(rgb, broad_rgb, ctx.polar_blend * 0.92)
+        if ctx.polar_cap_blend > 0.05:
+            snow_cap = blend_rgb(broad_rgb, (242, 246, 250), ctx.polar_cap_blend * 0.88)
+            rgb = blend_rgb(rgb, snow_cap, ctx.polar_cap_blend * 0.72)
+        if ctx.polar_blend > 0.08:
+            polar_land = blend_rgb(ctx.pole_rgb, broad_rgb, 0.22)
+            rgb = blend_rgb(rgb, polar_land, ctx.polar_blend * 0.88)
+        return tune_material_color(rgb, **land_rules["tone"])
+    rgb = blend_rgb(rgb, micro_rgb, land_rules["detail_amount"] * 0.55)
+    if ctx.polar_blend > 0.05:
+        rgb = blend_rgb(rgb, ctx.pole_rgb, ctx.polar_blend * 0.76)
+    if ctx.polar_cap_blend > 0.1:
+        rgb = blend_rgb(rgb, ctx.pole_rgb, ctx.polar_cap_blend * 0.48)
+    return rgb
 
 
-def bake_texture(surface_map: dict, material_root: Path, scale: int | None = None) -> Image.Image:
-    loaded, north_pole, south_pole = load_material_bundle(material_root)
+def bake_texture(surface_map: dict, material_root: Path, scale: int | None = None, channel: str = "albedo") -> Image.Image:
+    loaded, north_pole, south_pole = load_material_bundle(material_root, channel=channel)
 
     scale = int(scale or MATERIAL_RULES["texture_scale"])
     width = int(surface_map["lon_steps"]) * scale
@@ -357,5 +426,9 @@ def bake_texture(surface_map: dict, material_root: Path, scale: int | None = Non
     for y in range(height):
         for x in range(width):
             ctx = build_pixel_context(surface_map, x, y, width, height, north_pole, south_pole)
-            px[x, y] = bake_ocean_rgb(loaded, threshold, ctx) if ctx.value < threshold else bake_land_rgb(loaded, threshold, ctx)
+            px[x, y] = (
+                bake_ocean_rgb(loaded, threshold, ctx, channel=channel)
+                if ctx.value < threshold
+                else bake_land_rgb(loaded, threshold, ctx, channel=channel)
+            )
     return image

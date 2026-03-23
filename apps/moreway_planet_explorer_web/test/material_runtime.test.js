@@ -10,20 +10,31 @@ function makeTexture(name) {
 test('material runtime loads baked OpenAI texture and applies it', async () => {
   const baseTexture = makeTexture('base');
   const loadedTexture = makeTexture('baked');
-  const planet = { material: { map: null, needsUpdate: false } };
+  const loadedNormal = makeTexture('normal');
+  const loadedRoughness = makeTexture('roughness');
+  const planet = { material: { map: null, normalMap: null, roughnessMap: null, needsUpdate: false } };
   const urls = [];
 
   const runtime = createMaterialRuntime({
     dataSetBase: '/var/moreway_planet_dataset',
     manifestRef: () => ({
       build_id: 'build123',
-      planet: { surface_map: {}, baked_textures: { openai_materials: 'builds/build123/textures/openai_materials.png' } },
+      planet: {
+        surface_map: {},
+        baked_textures: {
+          openai_materials: 'builds/build123/textures/openai_materials.png',
+          openai_materials_normal: 'builds/build123/textures/openai_materials_normal.png',
+          openai_materials_roughness: 'builds/build123/textures/openai_materials_roughness.png',
+        },
+      },
     }),
     planet,
     textureLoader: {
       load(url, onLoad) {
         urls.push(url);
-        onLoad(loadedTexture);
+        if (url.endsWith('_normal.png')) onLoad(loadedNormal);
+        else if (url.endsWith('_roughness.png')) onLoad(loadedRoughness);
+        else onLoad(loadedTexture);
       },
     },
     buildPlanetMaterialTexture: async () => {
@@ -36,14 +47,20 @@ test('material runtime loads baked OpenAI texture and applies it', async () => {
   runtime.setBaseSurfaceTexture(baseTexture);
   await runtime.applyPlanetTextureMode('openai_materials');
 
-  assert.equal(urls[0], '/var/moreway_planet_dataset/builds/build123/textures/openai_materials.png');
+  assert.deepEqual(urls, [
+    '/var/moreway_planet_dataset/builds/build123/textures/openai_materials.png',
+    '/var/moreway_planet_dataset/builds/build123/textures/openai_materials_normal.png',
+    '/var/moreway_planet_dataset/builds/build123/textures/openai_materials_roughness.png',
+  ]);
   assert.equal(planet.material.map, loadedTexture);
+  assert.equal(planet.material.normalMap, loadedNormal);
+  assert.equal(planet.material.roughnessMap, loadedRoughness);
   assert.equal(planet.material.needsUpdate, true);
 });
 
 test('material runtime falls back to surface texture on failure', async () => {
   const baseTexture = makeTexture('base');
-  const planet = { material: { map: null, needsUpdate: false } };
+  const planet = { material: { map: null, normalMap: null, roughnessMap: null, needsUpdate: false } };
   let fallbackMode = '';
   let status = '';
 
@@ -73,5 +90,7 @@ test('material runtime falls back to surface texture on failure', async () => {
   assert.equal(fallbackMode, 'surface_map');
   assert.equal(runtime.getCurrentTextureMode(), 'surface_map');
   assert.equal(planet.material.map, baseTexture);
+  assert.equal(planet.material.normalMap, null);
+  assert.equal(planet.material.roughnessMap, null);
   assert.match(status, /OpenAI 材质不可用/);
 });

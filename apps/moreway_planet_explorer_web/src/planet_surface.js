@@ -1,4 +1,11 @@
 import * as THREE from 'three';
+import materialRules from './material_rules.json' with { type: 'json' };
+import {
+  computeDistortion,
+  computeLandBandWeights,
+  computeLandEcology,
+  smoothstep,
+} from './material_ecology.js';
 
 export function surfaceDisplacementFromValue(surfaceMap, value) {
   const threshold = surfaceMap.land_threshold;
@@ -86,11 +93,6 @@ export function buildPlanetTexture(surfaceMap) {
   const image = ctx.createImageData(width, height);
   const threshold = surfaceMap.land_threshold;
 
-  function smoothstep(edge0, edge1, x) {
-    const t = Math.max(0, Math.min(1, (x - edge0) / Math.max(edge1 - edge0, 1e-6)));
-    return t * t * (3 - 2 * t);
-  }
-
   function lerp(a, b, t) {
     return a + (b - a) * t;
   }
@@ -103,14 +105,19 @@ export function buildPlanetTexture(surfaceMap) {
     ];
   }
 
-  const deepSea = [6, 22, 64];
-  const sea = [18, 66, 128];
-  const shallowSea = [72, 126, 178];
-  const coast = [201, 181, 129];
-  const lowland = [86, 122, 74];
-  const upland = [118, 104, 76];
-  const mountain = [148, 142, 138];
-  const snow = [245, 247, 250];
+  const palette = materialRules.raw_palette;
+  const deepSea = palette.deep_ocean;
+  const midSea = palette.mid_ocean;
+  const shallowSea = palette.shallow_ocean;
+  const coastalWater = palette.coastal_water;
+  const coastWet = palette.coast_wet;
+  const coastDry = palette.coast_dry;
+  const lowlandGrass = palette.lowland_grass;
+  const lowlandForest = palette.lowland_forest;
+  const uplandTemperate = palette.upland_temperate;
+  const uplandDry = palette.upland_dry;
+  const mountainRock = palette.mountain_rock;
+  const mountainSnow = palette.mountain_snow;
 
   for (let lat = 0; lat < height; lat += 1) {
     for (let lon = 0; lon < width; lon += 1) {
@@ -121,23 +128,70 @@ export function buildPlanetTexture(surfaceMap) {
 
       if (value < threshold) {
         const seaLevel = value / Math.max(threshold, 1);
-        const deepBand = smoothstep(0.0, 0.55, seaLevel);
-        const shallowBand = smoothstep(0.55, 1.0, seaLevel);
-        rgb = seaLevel < 0.55
-          ? mixColor(deepSea, sea, deepBand)
-          : mixColor(sea, shallowSea, shallowBand);
+        if (seaLevel < materialRules.ocean.deep_end) {
+          rgb = deepSea;
+        } else if (seaLevel < materialRules.ocean.mid_end) {
+          rgb = mixColor(
+            deepSea,
+            midSea,
+            smoothstep(materialRules.ocean.deep_end, materialRules.ocean.mid_end, seaLevel),
+          );
+        } else if (seaLevel < materialRules.ocean.shallow_end) {
+          rgb = mixColor(
+            midSea,
+            shallowSea,
+            smoothstep(materialRules.ocean.mid_end, materialRules.ocean.shallow_end, seaLevel),
+          );
+        } else {
+          rgb = mixColor(
+            shallowSea,
+            coastalWater,
+            smoothstep(materialRules.ocean.shallow_end, 1.0, seaLevel),
+          );
+        }
       } else {
         const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
-        const compressed = Math.pow(landLevel, 1.55);
-        if (compressed < 0.18) {
-          rgb = mixColor(coast, lowland, smoothstep(0.0, 0.18, compressed));
-        } else if (compressed < 0.58) {
-          rgb = mixColor(lowland, upland, smoothstep(0.18, 0.58, compressed));
-        } else if (compressed < 0.86) {
-          rgb = mixColor(upland, mountain, smoothstep(0.58, 0.86, compressed));
-        } else {
-          rgb = mixColor(mountain, snow, smoothstep(0.86, 1.0, compressed));
-        }
+        const compressed = Math.pow(landLevel, materialRules.land.exponent);
+        const su = lon / width;
+        const sv = lat / height;
+        const distortion = computeDistortion(su, sv);
+        const {
+          dryness,
+          vegetation,
+          coldness,
+        } = computeLandEcology({ su, sv, compressed, distortion }, materialRules);
+        const ecologyRules = materialRules.land.ecology;
+
+        const coastColor = mixColor(coastWet, coastDry, dryness);
+        const lowlandColor = mixColor(
+          lowlandGrass,
+          lowlandForest,
+          smoothstep(ecologyRules.vegetation_blend_start, ecologyRules.vegetation_blend_end, vegetation),
+        );
+        const uplandColor = mixColor(
+          uplandTemperate,
+          uplandDry,
+          smoothstep(0.32, 0.78, dryness),
+        );
+        const mountainColor = mixColor(
+          mountainRock,
+          mountainSnow,
+          smoothstep(ecologyRules.snow_blend_start, ecologyRules.snow_blend_end, coldness + compressed * ecologyRules.coldness_height_bonus),
+        );
+        const weights = computeLandBandWeights(compressed, materialRules);
+        rgb = [0, 0, 0];
+        const layers = [
+          [coastColor, weights.coast],
+          [lowlandColor, weights.lowland],
+          [uplandColor, weights.upland],
+          [mountainColor, weights.mountain],
+        ];
+        layers.forEach(([color, weight]) => {
+          rgb[0] += color[0] * weight;
+          rgb[1] += color[1] * weight;
+          rgb[2] += color[2] * weight;
+        });
+        rgb = rgb.map((channel) => Math.round(channel));
       }
 
       image.data[pixel] = rgb[0];

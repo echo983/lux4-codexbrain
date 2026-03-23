@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { BAKE_CHANNELS, OPENAI_MATERIAL_ASSET_BASE, bakedTextureKey } from './material_assets.js';
 
 export function createMaterialRuntime({
   dataSetBase,
@@ -11,12 +12,13 @@ export function createMaterialRuntime({
 }) {
   const textureCache = new Map();
   let baseSurfaceTexture = null;
-  let openaiMaterialTexture = null;
+  let openaiMaterialTextures = null;
   let currentTextureMode = 'openai_materials';
 
-  async function loadExternalTexture(url) {
-    if (textureCache.has(url)) {
-      return textureCache.get(url);
+  async function loadExternalTexture(url, { colorSpace = THREE.NoColorSpace } = {}) {
+    const cacheKey = `${url}::${colorSpace}`;
+    if (textureCache.has(cacheKey)) {
+      return textureCache.get(cacheKey);
     }
     const texture = await new Promise((resolve, reject) => {
       textureLoader.load(
@@ -26,10 +28,10 @@ export function createMaterialRuntime({
         (err) => reject(err || new Error(`failed to load texture: ${url}`)),
       );
     });
-    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.colorSpace = colorSpace;
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
-    textureCache.set(url, texture);
+    textureCache.set(cacheKey, texture);
     return texture;
   }
 
@@ -49,6 +51,8 @@ export function createMaterialRuntime({
       if (mode === 'surface_map') {
         if (baseSurfaceTexture) {
           planet.material.map = baseSurfaceTexture;
+          planet.material.normalMap = null;
+          planet.material.roughnessMap = null;
           planet.material.needsUpdate = true;
         }
         return;
@@ -58,21 +62,31 @@ export function createMaterialRuntime({
         if (!manifest?.planet?.surface_map) {
           throw new Error('surface_map unavailable');
         }
-        if (!openaiMaterialTexture) {
-          const bakedUrl = bakedTextureUrl('openai_materials');
-          if (bakedUrl) {
+        if (!openaiMaterialTextures) {
+          const bakedUrls = Object.fromEntries(
+            BAKE_CHANNELS.map(({ channel }) => [channel, bakedTextureUrl(bakedTextureKey('openai_materials', channel))]),
+          );
+          if (Object.values(bakedUrls).every(Boolean)) {
             setStatus('正在加载 OpenAI 预烘焙地表材质…');
-            openaiMaterialTexture = await loadExternalTexture(bakedUrl);
+            const [map, normalMap, roughnessMap] = await Promise.all([
+              loadExternalTexture(bakedUrls.albedo, { colorSpace: THREE.SRGBColorSpace }),
+              loadExternalTexture(bakedUrls.normal),
+              loadExternalTexture(bakedUrls.roughness),
+            ]);
+            openaiMaterialTextures = { map, normalMap, roughnessMap };
           } else {
             setStatus('正在构建 OpenAI 地表材质…');
-            openaiMaterialTexture = await buildPlanetMaterialTexture(
+            const map = await buildPlanetMaterialTexture(
               manifest.planet.surface_map,
-              '/var/openai_image_experiments/materials',
+              OPENAI_MATERIAL_ASSET_BASE,
             );
+            openaiMaterialTextures = { map, normalMap: null, roughnessMap: null };
           }
         }
         if (currentTextureMode !== mode) return;
-        planet.material.map = openaiMaterialTexture;
+        planet.material.map = openaiMaterialTextures.map;
+        planet.material.normalMap = openaiMaterialTextures.normalMap;
+        planet.material.roughnessMap = openaiMaterialTextures.roughnessMap;
         planet.material.needsUpdate = true;
         return;
       }
@@ -83,6 +97,8 @@ export function createMaterialRuntime({
       onFallbackMode('surface_map');
       if (baseSurfaceTexture) {
         planet.material.map = baseSurfaceTexture;
+        planet.material.normalMap = null;
+        planet.material.roughnessMap = null;
         planet.material.needsUpdate = true;
       }
     }

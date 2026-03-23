@@ -6,6 +6,7 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const datasetRoot = path.join(repoRoot, 'var', 'moreway_planet_dataset');
 const assetCardRoot = path.join(repoRoot, 'var', 'google_keep_asset_cards_directmd_eval200');
 const openaiImageRoot = path.join(repoRoot, 'var', 'openai_image_experiments');
+const planetMaterialAssetRoot = path.join(repoRoot, 'var', 'planet_material_assets');
 
 function serveStaticDir(mountPath, rootPath) {
   return {
@@ -49,6 +50,7 @@ export default defineConfig({
     serveStaticDir('/var/moreway_planet_dataset', datasetRoot),
     serveStaticDir('/var/google_keep_asset_cards_directmd_eval200', assetCardRoot),
     serveStaticDir('/var/openai_image_experiments', openaiImageRoot),
+    serveStaticDir('/var/planet_material_assets', planetMaterialAssetRoot),
   ],
   server: {
     host: '0.0.0.0',

@@ -34,29 +34,39 @@
 当前正式材质源：
 
 - OpenAI 材质源
-  - 目录：`var/openai_image_experiments/materials/`
+  - 正式资产目录：`var/planet_material_assets/openai/v1/`
+  - 实验生成目录：`var/openai_image_experiments/materials/`
+    - 仅作为素材产出源，随后同步进正式资产库
 
-当前使用的材质类别：
+当前正式材质类别：
 
 - `deep_ocean`
+- `mid_ocean`
 - `shallow_ocean`
-- `coast`
-- `lowland`
-- `upland`
+- `coastal_water`
+- `coast_wet`
+- `coast_dry`
+- `lowland_grass`
+- `lowland_forest`
+- `upland_temperate`
+- `upland_dry`
+- `mountain_rock`
 - `mountain_snow`
 - `north_pole`
 - `south_pole`
 
-其中主材质允许存在多个变体，例如：
+正式资产库里每个 family 目录下按通道命名，例如：
 
-- `deep_ocean.png`
-- `deep_ocean_02.png`
-- `deep_ocean_03.png`
+- `deep_ocean/albedo_01.png`
+- `deep_ocean/albedo_02.png`
+- `deep_ocean/albedo_03.png`
 
 OpenAI 材质源生成与实验：
 
 - [openai_image_generate.py](/root/lux4-codexbrain/scripts/openai_image_generate.py)
 - [openai_planet_texture_experiment.py](/root/lux4-codexbrain/scripts/openai_planet_texture_experiment.py)
+- [openai_planet_material_set_experiment.py](/root/lux4-codexbrain/scripts/openai_planet_material_set_experiment.py)
+- [sync_openai_planet_material_asset_set.py](/root/lux4-codexbrain/scripts/sync_openai_planet_material_asset_set.py)
 
 ### 3. 离线预烘焙层
 

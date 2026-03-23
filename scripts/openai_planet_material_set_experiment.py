@@ -19,20 +19,46 @@ MATERIAL_PROMPTS = {
         "Premium cartographic finish, rich deep blue water, subtle large-scale currents, no coastlines, no land, no horizon, no objects, no text."
     ),
     "shallow_ocean": (
-        "Create a seamless square tileable top-down material texture for shallow tropical ocean water. "
-        "Premium cartographic finish, turquoise and cyan shallows, subtle wave patterns, no coastlines, no land, no horizon, no objects, no text."
+        "Create a seamless square tileable top-down material texture for shallow ocean water seen from above. "
+        "Premium cartographic finish, clear azure and cyan shallows with subtle depth variation, natural marine texture, no coastlines, no land, no horizon, no objects, no text. "
+        "Avoid neon colors, avoid mint-green muddiness, avoid yellow cast."
     ),
-    "coast": (
-        "Create a seamless square tileable top-down material texture for sandy coastlines and dry littoral terrain. "
-        "Premium cartographic finish, pale sand, subtle sediment variation, sparse shoreline texture hints, no water bodies, no objects, no text."
+    "mid_ocean": (
+        "Create a seamless square tileable top-down material texture for mid-depth ocean water. "
+        "Premium cartographic finish, balanced blue ocean, subtle current structures, no coastlines, no land, no horizon, no objects, no text."
     ),
-    "lowland": (
-        "Create a seamless square tileable top-down material texture for temperate lowland terrain. "
-        "Premium cartographic finish, muted green and olive grassland, subtle field-like variation, no roads, no buildings, no text."
+    "coastal_water": (
+        "Create a seamless square tileable top-down material texture for coastal water and littoral shallows seen from above. "
+        "Premium cartographic finish, natural blue-to-aqua coastal sea with gentle suspended sediment diffusion, soft surf-zone variation, no visible land masses, no horizon, no objects, no text. "
+        "Keep it oceanic, not swampy; avoid olive, beige, or gray-green tones."
     ),
-    "upland": (
-        "Create a seamless square tileable top-down material texture for upland and rocky plateau terrain. "
-        "Premium cartographic finish, olive-brown and stone tones, subdued ridges, no buildings, no labels, no text."
+    "coast_wet": (
+        "Create a seamless square tileable top-down material texture for wet coastlines and lush littoral terrain. "
+        "Premium cartographic finish, damp sand, vegetated shoreline transitions, estuary-like richness, no open water bodies, no objects, no text."
+    ),
+    "coast_dry": (
+        "Create a seamless square tileable top-down material texture for dry coastlines and sandy littoral terrain. "
+        "Premium cartographic finish, pale sand, dry sediment, sparse scrub hints, no open water bodies, no objects, no text."
+    ),
+    "lowland_grass": (
+        "Create a seamless square tileable top-down material texture for temperate grassy lowland terrain. "
+        "Premium cartographic finish, healthy green grassland, gentle field variation, no roads, no buildings, no text."
+    ),
+    "lowland_forest": (
+        "Create a seamless square tileable top-down material texture for dense temperate forest lowland terrain. "
+        "Premium cartographic finish, layered green canopy, darker forest patches, rich vegetated texture, no roads, no buildings, no text."
+    ),
+    "upland_temperate": (
+        "Create a seamless square tileable top-down material texture for temperate upland and rocky plateau terrain. "
+        "Premium cartographic finish, green-brown uplands, stony ridges, subdued relief, no buildings, no labels, no text."
+    ),
+    "upland_dry": (
+        "Create a seamless square tileable top-down material texture for dry upland and semi-arid plateau terrain. "
+        "Premium cartographic finish, dusty stone, sparse dry vegetation, weathered rocky surfaces, no buildings, no labels, no text."
+    ),
+    "mountain_rock": (
+        "Create a seamless square tileable top-down material texture for rocky mountain terrain. "
+        "Premium cartographic finish, exposed rock strata, cold rugged slopes, minimal snow, no horizon, no text, no objects."
     ),
     "mountain_snow": (
         "Create a seamless square tileable top-down material texture for alpine mountains and snow peaks. "
@@ -48,6 +74,28 @@ MATERIAL_PROMPTS = {
     ),
 }
 
+DEFAULT_FAMILIES = [
+    "deep_ocean",
+    "mid_ocean",
+    "shallow_ocean",
+    "coastal_water",
+    "coast_wet",
+    "coast_dry",
+    "lowland_grass",
+    "lowland_forest",
+    "upland_temperate",
+    "upland_dry",
+    "mountain_rock",
+    "mountain_snow",
+    "north_pole",
+    "south_pole",
+]
+
+
+def output_path_for(output_dir: Path, family: str, variant_index: int) -> Path:
+    suffix = "" if variant_index == 0 else f"_{variant_index + 1:02d}"
+    return output_dir / f"{family}{suffix}.png"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate a small OpenAI terrain material set for the Moreway planet.")
@@ -55,6 +103,8 @@ def main() -> int:
     parser.add_argument("--size", default="1024x1024")
     parser.add_argument("--model", default=DEFAULT_IMAGE_MODEL)
     parser.add_argument("--output-dir", default=str((DEFAULT_OUTPUT_DIR / "materials").resolve()))
+    parser.add_argument("--families", default=",".join(DEFAULT_FAMILIES), help="Comma-separated material families to generate.")
+    parser.add_argument("--variants", type=int, default=1, help="How many variants to generate per family.")
     parser.add_argument("--print-json", action="store_true")
     args = parser.parse_args()
 
@@ -66,26 +116,39 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     generated: dict[str, str] = {}
-    for key, prompt in MATERIAL_PROMPTS.items():
-        output = output_dir / f"{key}.png"
-        result = generate_with_image_api(
-            api_key=api_key,
-            base_url=base_url,
-            prompt=prompt,
-            model=args.model,
-            output=output,
-            size=args.size,
-            quality=args.quality,
-            background="opaque",
-            output_format="png",
-            output_compression=None,
-            moderation=None,
-            n=1,
-            input_images=[],
-            mask=None,
-            input_fidelity=None,
-        )
-        generated[key] = result["output_paths"][0]
+    families = [part.strip() for part in args.families.split(",") if part.strip()]
+    unknown = [family for family in families if family not in MATERIAL_PROMPTS]
+    if unknown:
+        raise SystemExit(f"Unknown material families: {', '.join(unknown)}")
+    if args.variants < 1:
+        raise SystemExit("--variants must be >= 1")
+
+    for family in families:
+        prompt = MATERIAL_PROMPTS[family]
+        for variant_index in range(args.variants):
+            output = output_path_for(output_dir, family, variant_index)
+            prompt_with_variant = prompt if args.variants == 1 else (
+                f"{prompt} Keep it distinct from sibling variants in the same family. "
+                f"This is variant {variant_index + 1} of {args.variants}."
+            )
+            result = generate_with_image_api(
+                api_key=api_key,
+                base_url=base_url,
+                prompt=prompt_with_variant,
+                model=args.model,
+                output=output,
+                size=args.size,
+                quality=args.quality,
+                background="opaque",
+                output_format="png",
+                output_compression=None,
+                moderation=None,
+                n=1,
+                input_images=[],
+                mask=None,
+                input_fidelity=None,
+            )
+            generated[output.name] = result["output_paths"][0]
 
     if args.print_json:
         sys.stdout.write(json.dumps(generated, ensure_ascii=False, indent=2))

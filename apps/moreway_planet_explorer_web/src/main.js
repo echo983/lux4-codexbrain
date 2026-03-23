@@ -291,6 +291,19 @@ function blendRgb(a, b, t) {
   ];
 }
 
+function weightedRgb(pairs) {
+  const accum = [0, 0, 0];
+  let total = 0;
+  pairs.forEach(([rgb, weight]) => {
+    total += weight;
+    accum[0] += rgb[0] * weight;
+    accum[1] += rgb[1] * weight;
+    accum[2] += rgb[2] * weight;
+  });
+  if (total <= 1e-6) return [0, 0, 0];
+  return accum.map((channel) => Math.round(channel / total));
+}
+
 function multiplyRgb(a, b) {
   return [
     Math.round((a[0] * b[0]) / 255),
@@ -357,6 +370,12 @@ function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
+function edgeAlpha(value, center, width) {
+  const distance = Math.abs(value - center);
+  if (distance >= width) return 0;
+  return 1 - smoothstep(0, width, distance);
+}
+
 function sampleVariant(texture, u, v, distortion = 0) {
   const base = sampleImageDataBilinear(texture.data, texture.width, texture.height, u, v);
   const shifted = sampleImageDataBilinear(
@@ -407,6 +426,39 @@ function sampleMaterialRgb(textures, u, v, distortion = 0) {
   ];
 }
 
+function composeMaterialFamilyRgb(loaded, family, {
+  broadU, broadV, detailU, detailV, microU, microV, distortion, broadMix, detailAmount,
+}) {
+  const broadRgb = sampleMaterialRgb(loaded[family], broadU, broadV, distortion * 0.5);
+  const detailRgb = sampleMaterialRgb(loaded[family], detailU, detailV, distortion);
+  const microRgb = sampleMaterialRgb(loaded[family], microU, microV, distortion * 1.15);
+  const rgb = blendRgb(broadRgb, detailRgb, broadMix);
+  return applyMaterialDetail(rgb, microRgb, detailAmount);
+}
+
+function composeWeightedFamiliesRgb(loaded, familyWeights, {
+  broadU, broadV, detailU, detailV, microU, microV, distortion, broadMix, detailAmount,
+}) {
+  const pairs = Object.entries(familyWeights).map(([family, weight]) => [
+    composeMaterialFamilyRgb(loaded, family, {
+      broadU, broadV, detailU, detailV, microU, microV, distortion, broadMix, detailAmount,
+    }),
+    weight,
+  ]);
+  return weightedRgb(pairs);
+}
+
+function applyTransitionZone(currentRgb, sideARgb, sideBRgb, { value, center, width }) {
+  const low = center - width;
+  const high = center + width;
+  if (value <= low || value >= high) return currentRgb;
+  const t = smoothstep(low, high, value);
+  const midpoint = 1 - Math.abs(t - 0.5) * 2;
+  const blendStrength = 0.72 + midpoint * 0.28;
+  const transitionRgb = blendRgb(sideARgb, sideBRgb, t);
+  return blendRgb(currentRgb, transitionRgb, blendStrength);
+}
+
 function applyMaterialDetail(baseRgb, detailRgb, amount = 0.25) {
   const detailLuma = luminance(detailRgb);
   const neutralized = blendRgb([128, 128, 128], detailRgb, 0.82);
@@ -453,10 +505,14 @@ const PRIMARY_FAMILIES = [
 ];
 
 function regionalVariation(u, v) {
+  const theta = u * Math.PI * 2;
+  const sx = Math.sin(theta);
+  const cx = Math.cos(theta);
+  const lat = v * 2 - 1;
   return (
-    Math.sin((u * 1.73 + v * 0.41) * Math.PI * 2) * 0.35
-    + Math.cos((u * 0.67 - v * 1.21) * Math.PI * 2) * 0.25
-    + Math.sin((u * 0.19 + v * 0.14) * Math.PI * 6) * 0.10
+    Math.sin((sx * 0.91 + lat * 0.41) * Math.PI * 1.6) * 0.35
+    + Math.cos((cx * 0.73 - lat * 1.07) * Math.PI * 1.4) * 0.25
+    + Math.sin((sx * 0.37 + cx * 0.22 + lat * 0.18) * Math.PI * 3.4) * 0.10
   );
 }
 
@@ -469,27 +525,53 @@ function deriveRegionStyleFields(u, v, compressedLand, continentBias = 0) {
   return { latitude, regional_variation: variation, dryness, coldness, vegetation };
 }
 
-function chooseLandFamilies(compressedLand, styleFields) {
-  const { dryness, vegetation, coldness } = styleFields;
-  if (compressedLand < 0.18) {
-    return [dryness > 0.58 ? 'coast_dry' : 'coast_wet', dryness > 0.72 ? 'coast_dry' : 'coast_wet'];
-  }
-  if (compressedLand < 0.58) {
-    const primary = vegetation > 0.44 ? 'lowland_forest' : 'lowland_grass';
-    return [primary, primary === 'lowland_forest' ? 'lowland_grass' : 'lowland_forest'];
-  }
-  if (compressedLand < 0.86) {
-    const primary = dryness > 0.55 ? 'upland_dry' : 'upland_temperate';
-    return [primary, primary === 'upland_dry' ? 'upland_temperate' : 'upland_dry'];
-  }
-  return coldness > 0.52 ? ['mountain_snow', 'mountain_rock'] : ['mountain_rock', 'mountain_snow'];
+function normalizeFamilyWeights(weights) {
+  const entries = Object.entries(weights).filter(([, weight]) => weight > 0.001).map(([family, weight]) => [family, Math.max(0, weight)]);
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  if (total <= 1e-6) return {};
+  return Object.fromEntries(entries.map(([family, weight]) => [family, weight / total]));
 }
 
-function chooseOceanFamilies(seaLevel, latitude) {
-  if (seaLevel < 0.36) return ['deep_ocean', 'mid_ocean'];
-  if (seaLevel < 0.72) return ['mid_ocean', 'deep_ocean'];
-  if (latitude > 0.78) return ['coastal_water', 'shallow_ocean'];
-  return ['shallow_ocean', 'coastal_water'];
+function reduceFamilyWeights(weights, keepTop = 3) {
+  const entries = Object.entries(weights).sort((a, b) => b[1] - a[1]).slice(0, keepTop);
+  const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  if (total <= 1e-6) return {};
+  return Object.fromEntries(entries.map(([family, weight]) => [family, weight / total]));
+}
+
+function computeLandFamilyWeights(compressedLand, styleFields) {
+  const { dryness, vegetation, coldness } = styleFields;
+  const coastBand = 1 - smoothstep(0.10, 0.30, compressedLand);
+  const lowlandBand = smoothstep(0.08, 0.26, compressedLand) * (1 - smoothstep(0.46, 0.70, compressedLand));
+  const uplandBand = smoothstep(0.48, 0.66, compressedLand) * (1 - smoothstep(0.78, 0.94, compressedLand));
+  const mountainBand = smoothstep(0.80, 0.96, compressedLand);
+  const coastDryMix = smoothstep(0.42, 0.74, dryness);
+  const forestMix = smoothstep(0.28, 0.62, vegetation);
+  const uplandDryMix = smoothstep(0.40, 0.72, dryness);
+  const snowMix = smoothstep(0.42, 0.72, coldness);
+  return reduceFamilyWeights(normalizeFamilyWeights({
+    coast_wet: coastBand * (1 - coastDryMix),
+    coast_dry: coastBand * coastDryMix,
+    lowland_grass: lowlandBand * (1 - forestMix),
+    lowland_forest: lowlandBand * forestMix,
+    upland_temperate: uplandBand * (1 - uplandDryMix),
+    upland_dry: uplandBand * uplandDryMix,
+    mountain_rock: mountainBand * (1 - snowMix),
+    mountain_snow: mountainBand * snowMix,
+  }));
+}
+
+function computeOceanFamilyWeights(seaLevel, latitude) {
+  const deepBand = 1 - smoothstep(0.22, 0.46, seaLevel);
+  const midBand = smoothstep(0.18, 0.42, seaLevel) * (1 - smoothstep(0.58, 0.84, seaLevel));
+  const shallowBand = smoothstep(0.56, 0.80, seaLevel) * (1 - smoothstep(0.84, 1.02, seaLevel));
+  const coastalBand = smoothstep(0.74, 1.0, seaLevel) * (0.55 + 0.45 * latitude);
+  return reduceFamilyWeights(normalizeFamilyWeights({
+    deep_ocean: deepBand,
+    mid_ocean: midBand,
+    shallow_ocean: shallowBand,
+    coastal_water: coastalBand,
+  }));
 }
 
 async function loadResolvedMaterialVariants(materialBasePath, family, variantCount = 3) {
@@ -513,7 +595,7 @@ async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
   ]);
   const loaded = Object.fromEntries(loadedEntries);
 
-  const scale = 12;
+  const scale = 8;
   const width = surfaceMap.lon_steps * scale;
   const height = surfaceMap.lat_steps * scale;
   const threshold = surfaceMap.land_threshold;
@@ -559,30 +641,13 @@ async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
       let broadRgb;
       if (value < threshold) {
         const seaLevel = value / Math.max(threshold, 1);
-        const [primaryFamily, secondaryFamily] = chooseOceanFamilies(seaLevel, latitude);
-        const oceanDetail = seaLevel < 0.58
-          ? sampleMaterialRgb(loaded[primaryFamily], detailU, detailV, distortion)
-          : blendRgb(
-            sampleMaterialRgb(loaded[primaryFamily], detailU, detailV, distortion),
-            sampleMaterialRgb(loaded[secondaryFamily], detailU2, detailV2, distortion),
-            smoothstep(0.58, 1.0, seaLevel),
-          );
-        const oceanMicro = seaLevel < 0.58
-          ? sampleMaterialRgb(loaded[primaryFamily], microU, microV, distortion * 1.3)
-          : blendRgb(
-            sampleMaterialRgb(loaded[primaryFamily], microU, microV, distortion * 1.3),
-            sampleMaterialRgb(loaded[secondaryFamily], microV, microU, distortion * 1.3),
-            smoothstep(0.58, 1.0, seaLevel),
-          );
-        broadRgb = seaLevel < 0.58
-          ? sampleMaterialRgb(loaded[primaryFamily], broadU, broadV, distortion * 0.5)
-          : blendRgb(
-            sampleMaterialRgb(loaded[primaryFamily], broadU, broadV, distortion * 0.5),
-            sampleMaterialRgb(loaded[secondaryFamily], broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.58, 1.0, seaLevel),
-          );
-        rgb = blendRgb(broadRgb, oceanDetail, 0.44);
-        rgb = applyMaterialDetail(rgb, oceanMicro, 0.16);
+        const familyWeights = computeOceanFamilyWeights(seaLevel, latitude);
+        rgb = composeWeightedFamiliesRgb(loaded, familyWeights, {
+          broadU, broadV, detailU, detailV, microU, microV, distortion, broadMix: 0.44, detailAmount: 0.16,
+        });
+        broadRgb = composeWeightedFamiliesRgb(loaded, familyWeights, {
+          broadU: broadU2, broadV: broadV2, detailU: broadU, detailV: broadV, microU: broadV2, microV: broadU2, distortion: distortion * 0.4, broadMix: 0.22, detailAmount: 0.08,
+        });
         if (polarBlend > 0) {
           rgb = blendRgb(rgb, broadRgb, polarBlend * 0.9);
         }
@@ -597,17 +662,13 @@ async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
         const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
         const compressed = Math.pow(landLevel, 1.55);
         const styleFields = deriveRegionStyleFields(su, sv, compressed);
-        const [primaryFamily, secondaryFamily] = chooseLandFamilies(compressed, styleFields);
-        let detailRgb = sampleMaterialRgb(loaded[primaryFamily], detailU, detailV, distortion);
-        const secondaryRgb = sampleMaterialRgb(loaded[secondaryFamily], detailU2, detailV2, distortion);
-        const microRgb = sampleMaterialRgb(loaded[primaryFamily], microU, microV, distortion * 1.15);
-        broadRgb = sampleMaterialRgb(loaded[primaryFamily], broadU, broadV, distortion * 0.5);
-        if (primaryFamily !== secondaryFamily) {
-          const bandMix = smoothstep(0, 1, compressed);
-          detailRgb = blendRgb(detailRgb, secondaryRgb, bandMix * 0.28);
-        }
-        rgb = blendRgb(broadRgb, detailRgb, 0.48);
-        rgb = applyMaterialDetail(rgb, microRgb, 0.28);
+        const familyWeights = computeLandFamilyWeights(compressed, styleFields);
+        rgb = composeWeightedFamiliesRgb(loaded, familyWeights, {
+          broadU, broadV, detailU, detailV, microU, microV, distortion, broadMix: 0.48, detailAmount: 0.28,
+        });
+        broadRgb = composeWeightedFamiliesRgb(loaded, familyWeights, {
+          broadU: broadU2, broadV: broadV2, detailU: broadU, detailV: broadV, microU: broadV2, microV: broadU2, distortion: distortion * 0.4, broadMix: 0.24, detailAmount: 0.08,
+        });
         if (polarBlend > 0) {
           rgb = blendRgb(rgb, broadRgb, polarBlend * 0.92);
         }
@@ -619,6 +680,41 @@ async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
           const polarLand = blendRgb(poleRgb, broadRgb, 0.22);
           rgb = blendRgb(rgb, polarLand, polarBlend * 0.88);
         }
+      }
+
+      const shorelineAlpha = edgeAlpha(value, threshold, 28.0);
+      if (shorelineAlpha > 0) {
+        const shorelineValue = threshold;
+        const seaLevel = Math.min(shorelineValue, threshold - 1e-3) / Math.max(threshold, 1);
+        const oceanFamilyWeights = computeOceanFamilyWeights(seaLevel, latitude);
+        let oceanRgb = composeWeightedFamiliesRgb(loaded, oceanFamilyWeights, {
+          broadU, broadV, detailU, detailV, microU, microV, distortion, broadMix: 0.44, detailAmount: 0.16,
+        });
+        const oceanBroad = composeWeightedFamiliesRgb(loaded, oceanFamilyWeights, {
+          broadU: broadU2, broadV: broadV2, detailU: broadU, detailV: broadV, microU: broadV2, microV: broadU2, distortion: distortion * 0.4, broadMix: 0.22, detailAmount: 0.08,
+        });
+        if (polarBlend > 0.08) {
+          oceanRgb = blendRgb(oceanRgb, poleRgb, polarBlend * 0.82);
+        }
+        oceanRgb = tuneMaterialColor(oceanRgb, { saturation: 1.08, gain: 1.08, lift: 6 });
+
+        const landLevel = (Math.max(shorelineValue, threshold + 1e-3) - threshold) / Math.max(255 - threshold, 1);
+        const compressed = Math.pow(landLevel, 1.55);
+        const edgeStyleFields = deriveRegionStyleFields(su, sv, compressed);
+        const landFamilyWeights = computeLandFamilyWeights(compressed, edgeStyleFields);
+        let landRgb = composeWeightedFamiliesRgb(loaded, landFamilyWeights, {
+          broadU, broadV, detailU, detailV, microU, microV, distortion, broadMix: 0.48, detailAmount: 0.28,
+        });
+        const landBroad = composeWeightedFamiliesRgb(loaded, landFamilyWeights, {
+          broadU: broadU2, broadV: broadV2, detailU: broadU, detailV: broadV, microU: broadV2, microV: broadU2, distortion: distortion * 0.4, broadMix: 0.24, detailAmount: 0.08,
+        });
+        if (polarBlend > 0.08) {
+          const polarLand = blendRgb(poleRgb, landBroad, 0.22);
+          landRgb = blendRgb(landRgb, polarLand, polarBlend * 0.88);
+        }
+        landRgb = tuneMaterialColor(landRgb, { saturation: 1.12, gain: 1.07, lift: 5 });
+
+        rgb = applyTransitionZone(rgb, oceanRgb, landRgb, { value, center: threshold, width: 28.0 });
       }
 
       rgb = tuneMaterialColor(rgb, value < threshold

@@ -62,6 +62,18 @@ def blend_rgb(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tup
     return tuple(round(a[idx] + (b[idx] - a[idx]) * t) for idx in range(3))
 
 
+def weighted_rgb(pairs: Iterable[tuple[tuple[int, int, int], float]]) -> tuple[int, int, int]:
+    accum = [0.0, 0.0, 0.0]
+    total = 0.0
+    for rgb, weight in pairs:
+        total += weight
+        for idx in range(3):
+            accum[idx] += rgb[idx] * weight
+    if total <= 1e-6:
+        return 0, 0, 0
+    return tuple(round(channel / total) for channel in accum)
+
+
 def multiply_rgb(a: tuple[int, int, int], b: tuple[int, int, int]) -> tuple[int, int, int]:
     return tuple(round((a[idx] * b[idx]) / 255.0) for idx in range(3))
 
@@ -145,10 +157,14 @@ def resolve_family_variants(material_root: Path, family: str, variant_count: int
 
 
 def regional_variation(u: float, v: float) -> float:
+    theta = u * math.pi * 2.0
+    sx = math.sin(theta)
+    cx = math.cos(theta)
+    lat = v * 2.0 - 1.0
     return (
-        math.sin((u * 1.73 + v * 0.41) * math.pi * 2.0) * 0.35
-        + math.cos((u * 0.67 - v * 1.21) * math.pi * 2.0) * 0.25
-        + math.sin((u * 0.19 + v * 0.14) * math.pi * 6.0) * 0.10
+        math.sin((sx * 0.91 + lat * 0.41) * math.pi * 1.6) * 0.35
+        + math.cos((cx * 0.73 - lat * 1.07) * math.pi * 1.4) * 0.25
+        + math.sin((sx * 0.37 + cx * 0.22 + lat * 0.18) * math.pi * 3.4) * 0.10
     )
 
 
@@ -167,33 +183,98 @@ def derive_region_style_fields(*, u: float, v: float, compressed_land: float, co
     }
 
 
-def choose_land_families(compressed_land: float, style_fields: dict[str, float]) -> tuple[str, str]:
+def normalize_family_weights(weights: dict[str, float]) -> dict[str, float]:
+    filtered = {family: max(0.0, weight) for family, weight in weights.items() if weight > 0.001}
+    total = sum(filtered.values())
+    if total <= 1e-6:
+        return {}
+    return {family: weight / total for family, weight in filtered.items()}
+
+
+def reduce_family_weights(weights: dict[str, float], keep_top: int = 3) -> dict[str, float]:
+    ordered = sorted(weights.items(), key=lambda item: item[1], reverse=True)[:keep_top]
+    total = sum(weight for _, weight in ordered)
+    if total <= 1e-6:
+        return {}
+    return {family: weight / total for family, weight in ordered}
+
+
+def compute_land_family_weights(compressed_land: float, style_fields: dict[str, float]) -> dict[str, float]:
     dryness = style_fields["dryness"]
     vegetation = style_fields["vegetation"]
     coldness = style_fields["coldness"]
-    if compressed_land < 0.18:
-        return ("coast_dry" if dryness > 0.58 else "coast_wet", "coast_dry" if dryness > 0.72 else "coast_wet")
-    if compressed_land < 0.58:
-        primary = "lowland_forest" if vegetation > 0.44 else "lowland_grass"
-        secondary = "lowland_grass" if primary == "lowland_forest" else "lowland_forest"
-        return primary, secondary
-    if compressed_land < 0.86:
-        primary = "upland_dry" if dryness > 0.55 else "upland_temperate"
-        secondary = "upland_temperate" if primary == "upland_dry" else "upland_dry"
-        return primary, secondary
-    if coldness > 0.52:
-        return "mountain_snow", "mountain_rock"
-    return "mountain_rock", "mountain_snow"
+
+    coast_band = 1.0 - smoothstep(0.10, 0.30, compressed_land)
+    lowland_band = smoothstep(0.08, 0.26, compressed_land) * (1.0 - smoothstep(0.46, 0.70, compressed_land))
+    upland_band = smoothstep(0.48, 0.66, compressed_land) * (1.0 - smoothstep(0.78, 0.94, compressed_land))
+    mountain_band = smoothstep(0.80, 0.96, compressed_land)
+
+    coast_dry_mix = smoothstep(0.42, 0.74, dryness)
+    forest_mix = smoothstep(0.28, 0.62, vegetation)
+    upland_dry_mix = smoothstep(0.40, 0.72, dryness)
+    snow_mix = smoothstep(0.42, 0.72, coldness)
+
+    return reduce_family_weights(normalize_family_weights(
+        {
+            "coast_wet": coast_band * (1.0 - coast_dry_mix),
+            "coast_dry": coast_band * coast_dry_mix,
+            "lowland_grass": lowland_band * (1.0 - forest_mix),
+            "lowland_forest": lowland_band * forest_mix,
+            "upland_temperate": upland_band * (1.0 - upland_dry_mix),
+            "upland_dry": upland_band * upland_dry_mix,
+            "mountain_rock": mountain_band * (1.0 - snow_mix),
+            "mountain_snow": mountain_band * snow_mix,
+        }
+    ))
+
+
+def compute_ocean_family_weights(sea_level: float, latitude: float) -> dict[str, float]:
+    deep_band = 1.0 - smoothstep(0.22, 0.46, sea_level)
+    mid_band = smoothstep(0.18, 0.42, sea_level) * (1.0 - smoothstep(0.58, 0.84, sea_level))
+    shallow_band = smoothstep(0.56, 0.80, sea_level) * (1.0 - smoothstep(0.84, 1.02, sea_level))
+    coastal_band = smoothstep(0.74, 1.0, sea_level) * (0.55 + 0.45 * latitude)
+    return reduce_family_weights(normalize_family_weights(
+        {
+            "deep_ocean": deep_band,
+            "mid_ocean": mid_band,
+            "shallow_ocean": shallow_band,
+            "coastal_water": coastal_band,
+        }
+    ))
+
+
+def choose_land_families(compressed_land: float, style_fields: dict[str, float]) -> tuple[str, str]:
+    ordered = sorted(compute_land_family_weights(compressed_land, style_fields).items(), key=lambda item: item[1], reverse=True)
+    if not ordered:
+        return "lowland_grass", "lowland_forest"
+    if len(ordered) == 1:
+        fallback = {
+            "coast_wet": "coast_dry",
+            "coast_dry": "coast_wet",
+            "lowland_grass": "lowland_forest",
+            "lowland_forest": "lowland_grass",
+            "upland_temperate": "upland_dry",
+            "upland_dry": "upland_temperate",
+            "mountain_rock": "mountain_snow",
+            "mountain_snow": "mountain_rock",
+        }
+        return ordered[0][0], fallback[ordered[0][0]]
+    return ordered[0][0], ordered[1][0]
 
 
 def choose_ocean_families(sea_level: float, latitude: float) -> tuple[str, str]:
-    if sea_level < 0.36:
-        return "deep_ocean", "mid_ocean"
-    if sea_level < 0.72:
+    ordered = sorted(compute_ocean_family_weights(sea_level, latitude).items(), key=lambda item: item[1], reverse=True)
+    if not ordered:
         return "mid_ocean", "deep_ocean"
-    if latitude > 0.78:
-        return "coastal_water", "shallow_ocean"
-    return "shallow_ocean", "coastal_water"
+    if len(ordered) == 1:
+        fallback = {
+            "deep_ocean": "mid_ocean",
+            "mid_ocean": "shallow_ocean",
+            "shallow_ocean": "coastal_water",
+            "coastal_water": "shallow_ocean",
+        }
+        return ordered[0][0], fallback[ordered[0][0]]
+    return ordered[0][0], ordered[1][0]
 
 
 def material_style_metadata() -> dict:
@@ -264,7 +345,92 @@ def sample_material(variants: list[TextureVariant], u: float, v: float, distorti
     return tuple(round(channel / max(total, 1e-6)) for channel in accum)
 
 
-def bake_texture(surface_map: dict, material_root: Path, scale: int = 12) -> Image.Image:
+def edge_alpha(value: float, center: float, width: float) -> float:
+    distance = abs(value - center)
+    if distance >= width:
+        return 0.0
+    return 1.0 - smoothstep(0.0, width, distance)
+
+
+def compose_material_family_rgb(
+    loaded: dict[str, list[TextureVariant]],
+    family: str,
+    *,
+    broad_u: float,
+    broad_v: float,
+    detail_u: float,
+    detail_v: float,
+    micro_u: float,
+    micro_v: float,
+    distortion: float,
+    broad_mix: float,
+    detail_amount: float,
+) -> tuple[int, int, int]:
+    broad_rgb = sample_material(loaded[family], broad_u, broad_v, distortion * 0.5)
+    detail_rgb = sample_material(loaded[family], detail_u, detail_v, distortion)
+    micro_rgb = sample_material(loaded[family], micro_u, micro_v, distortion * 1.15)
+    rgb = blend_rgb(broad_rgb, detail_rgb, broad_mix)
+    return apply_material_detail(rgb, micro_rgb, detail_amount)
+
+
+def compose_weighted_families_rgb(
+    loaded: dict[str, list[TextureVariant]],
+    family_weights: dict[str, float],
+    *,
+    broad_u: float,
+    broad_v: float,
+    detail_u: float,
+    detail_v: float,
+    micro_u: float,
+    micro_v: float,
+    distortion: float,
+    broad_mix: float,
+    detail_amount: float,
+) -> tuple[int, int, int]:
+    pairs: list[tuple[tuple[int, int, int], float]] = []
+    for family, weight in family_weights.items():
+        pairs.append(
+            (
+                compose_material_family_rgb(
+                    loaded,
+                    family,
+                    broad_u=broad_u,
+                    broad_v=broad_v,
+                    detail_u=detail_u,
+                    detail_v=detail_v,
+                    micro_u=micro_u,
+                    micro_v=micro_v,
+                    distortion=distortion,
+                    broad_mix=broad_mix,
+                    detail_amount=detail_amount,
+                ),
+                weight,
+            )
+        )
+    return weighted_rgb(pairs)
+
+
+def apply_transition_zone(
+    current_rgb: tuple[int, int, int],
+    side_a_rgb: tuple[int, int, int],
+    side_b_rgb: tuple[int, int, int],
+    *,
+    value: float,
+    center: float,
+    width: float,
+) -> tuple[int, int, int]:
+    low = center - width
+    high = center + width
+    if value <= low or value >= high:
+        return current_rgb
+    t = smoothstep(low, high, value)
+    midpoint = 1.0 - abs(t - 0.5) * 2.0
+    blend_strength = 0.72 + midpoint * 0.28
+    transition_rgb = blend_rgb(side_a_rgb, side_b_rgb, t)
+    return blend_rgb(current_rgb, transition_rgb, blend_strength)
+
+
+def bake_texture(surface_map: dict, material_root: Path, scale: int = 8) -> Image.Image:
     loaded = {family: resolve_family_variants(material_root, family, 3) for family in PRIMARY_FAMILIES}
     north_pole = load_variants(material_root, "north_pole", 1)[0]
     south_pole = load_variants(material_root, "south_pole", 1)[0]
@@ -294,36 +460,33 @@ def bake_texture(surface_map: dict, material_root: Path, scale: int = 12) -> Ima
         distortion: float,
     ) -> tuple[int, int, int]:
         sea_level = value / max(threshold, 1.0)
-        primary_family, secondary_family = choose_ocean_families(sea_level, latitude)
-        ocean_detail = (
-            sample_material(loaded[primary_family], detail_u, detail_v, distortion)
-            if sea_level < 0.58
-            else blend_rgb(
-                sample_material(loaded[primary_family], detail_u, detail_v, distortion),
-                sample_material(loaded[secondary_family], detail_u2, detail_v2, distortion),
-                smoothstep(0.58, 1.0, sea_level),
-            )
+        family_weights = compute_ocean_family_weights(sea_level, latitude)
+        rgb = compose_weighted_families_rgb(
+            loaded,
+            family_weights,
+            broad_u=broad_u,
+            broad_v=broad_v,
+            detail_u=detail_u,
+            detail_v=detail_v,
+            micro_u=micro_u,
+            micro_v=micro_v,
+            distortion=distortion,
+            broad_mix=0.44,
+            detail_amount=0.16,
         )
-        ocean_micro = (
-            sample_material(loaded[primary_family], micro_u, micro_v, distortion * 1.3)
-            if sea_level < 0.58
-            else blend_rgb(
-                sample_material(loaded[primary_family], micro_u, micro_v, distortion * 1.3),
-                sample_material(loaded[secondary_family], micro_v, micro_u, distortion * 1.3),
-                smoothstep(0.58, 1.0, sea_level),
-            )
+        broad_rgb = compose_weighted_families_rgb(
+            loaded,
+            family_weights,
+            broad_u=broad_u2,
+            broad_v=broad_v2,
+            detail_u=broad_u,
+            detail_v=broad_v,
+            micro_u=broad_v2,
+            micro_v=broad_u2,
+            distortion=distortion * 0.4,
+            broad_mix=0.22,
+            detail_amount=0.08,
         )
-        broad_rgb = (
-            sample_material(loaded[primary_family], broad_u, broad_v, distortion * 0.5)
-            if sea_level < 0.58
-            else blend_rgb(
-                sample_material(loaded[primary_family], broad_u, broad_v, distortion * 0.5),
-                sample_material(loaded[secondary_family], broad_u2, broad_v2, distortion * 0.5),
-                smoothstep(0.58, 1.0, sea_level),
-            )
-        )
-        rgb = blend_rgb(broad_rgb, ocean_detail, 0.44)
-        rgb = apply_material_detail(rgb, ocean_micro, 0.16)
         if polar_blend > 0.0:
             rgb = blend_rgb(rgb, broad_rgb, polar_blend * 0.9)
         if polar_cap_blend > 0.05:
@@ -355,16 +518,33 @@ def bake_texture(surface_map: dict, material_root: Path, scale: int = 12) -> Ima
         land_level = (value - threshold) / max(255.0 - threshold, 1.0)
         compressed = land_level ** 1.55
         style_fields = derive_region_style_fields(u=su, v=sv, compressed_land=compressed)
-        primary_family, secondary_family = choose_land_families(compressed, style_fields)
-        detail_rgb = sample_material(loaded[primary_family], detail_u, detail_v, distortion)
-        secondary_rgb = sample_material(loaded[secondary_family], detail_u2, detail_v2, distortion)
-        micro_rgb = sample_material(loaded[primary_family], micro_u, micro_v, distortion * 1.15)
-        broad_rgb = sample_material(loaded[primary_family], broad_u, broad_v, distortion * 0.5)
-        if primary_family != secondary_family:
-            band_mix = smoothstep(0.0, 1.0, compressed)
-            detail_rgb = blend_rgb(detail_rgb, secondary_rgb, band_mix * 0.28)
-        rgb = blend_rgb(broad_rgb, detail_rgb, 0.48)
-        rgb = apply_material_detail(rgb, micro_rgb, 0.28)
+        family_weights = compute_land_family_weights(compressed, style_fields)
+        rgb = compose_weighted_families_rgb(
+            loaded,
+            family_weights,
+            broad_u=broad_u,
+            broad_v=broad_v,
+            detail_u=detail_u,
+            detail_v=detail_v,
+            micro_u=micro_u,
+            micro_v=micro_v,
+            distortion=distortion,
+            broad_mix=0.48,
+            detail_amount=0.28,
+        )
+        broad_rgb = compose_weighted_families_rgb(
+            loaded,
+            family_weights,
+            broad_u=broad_u2,
+            broad_v=broad_v2,
+            detail_u=broad_u,
+            detail_v=broad_v,
+            micro_u=broad_v2,
+            micro_v=broad_u2,
+            distortion=distortion * 0.4,
+            broad_mix=0.24,
+            detail_amount=0.08,
+        )
         if polar_blend > 0.0:
             rgb = blend_rgb(rgb, broad_rgb, polar_blend * 0.92)
         if polar_cap_blend > 0.05:
@@ -444,6 +624,55 @@ def bake_texture(surface_map: dict, material_root: Path, scale: int = 12) -> Ima
                     broad_u2,
                     broad_v2,
                     distortion,
+                )
+
+            shoreline_alpha = edge_alpha(value, threshold, 28.0)
+            if shoreline_alpha > 0.0:
+                shoreline_value = threshold
+                ocean_rgb = render_ocean_rgb(
+                    min(shoreline_value, threshold - 1e-3),
+                    latitude,
+                    polar_blend,
+                    polar_cap_blend,
+                    pole_rgb,
+                    detail_u,
+                    detail_v,
+                    detail_u2,
+                    detail_v2,
+                    micro_u,
+                    micro_v,
+                    broad_u,
+                    broad_v,
+                    broad_u2,
+                    broad_v2,
+                    distortion,
+                )
+                land_rgb = render_land_rgb(
+                    max(shoreline_value, threshold + 1e-3),
+                    su,
+                    sv,
+                    polar_blend,
+                    polar_cap_blend,
+                    pole_rgb,
+                    detail_u,
+                    detail_v,
+                    detail_u2,
+                    detail_v2,
+                    micro_u,
+                    micro_v,
+                    broad_u,
+                    broad_v,
+                    broad_u2,
+                    broad_v2,
+                    distortion,
+                )
+                rgb = apply_transition_zone(
+                    rgb,
+                    ocean_rgb,
+                    land_rgb,
+                    value=value,
+                    center=threshold,
+                    width=28.0,
                 )
 
             px[x, y] = rgb

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import materialRules from './material_rules.json';
 import { sampleSurfaceValueBilinear } from './planet_surface.js';
 
 function loadImage(url) {
@@ -164,13 +165,13 @@ function tuneMaterialColor(rgb, { saturation = 1.1, gain = 1.06, lift = 4 } = {}
 export async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
   const materialKeys = ['deep_ocean', 'shallow_ocean', 'coast', 'lowland', 'upland', 'mountain_snow'];
   const loadedEntries = await Promise.all([
-    ...materialKeys.map(async (key) => [key, await loadMaterialVariants(materialBasePath, key, 3)]),
+    ...materialKeys.map(async (key) => [key, await loadMaterialVariants(materialBasePath, key, materialRules.variant_count)]),
     ['north_pole', (await loadMaterialVariants(materialBasePath, 'north_pole', 1))[0]],
     ['south_pole', (await loadMaterialVariants(materialBasePath, 'south_pole', 1))[0]],
   ]);
   const loaded = Object.fromEntries(loadedEntries);
 
-  const scale = 12;
+  const scale = materialRules.texture_scale;
   const width = surfaceMap.lon_steps * scale;
   const height = surfaceMap.lat_steps * scale;
   const threshold = surfaceMap.land_threshold;
@@ -186,10 +187,10 @@ export async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
       const sv = y / height;
       const value = sampleSurfaceValueBilinear(surfaceMap, su, sv);
       const latitude = Math.abs(sv * 2 - 1);
-      const polarBlend = smoothstep(0.72, 0.96, latitude);
-      const polarCapBlend = smoothstep(0.84, 1.0, latitude);
+      const polarBlend = smoothstep(materialRules.polar.blend_start, materialRules.polar.blend_end, latitude);
+      const polarCapBlend = smoothstep(materialRules.polar.cap_start, materialRules.polar.cap_end, latitude);
       const isNorth = sv < 0.5;
-      const polarExtent = 0.28;
+      const polarExtent = materialRules.polar.extent;
       const polarRadius = isNorth
         ? Math.min(1, sv / polarExtent)
         : Math.min(1, (1 - sv) / polarExtent);
@@ -216,29 +217,29 @@ export async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
       let broadRgb;
       if (value < threshold) {
         const seaLevel = value / Math.max(threshold, 1);
-        const oceanDetail = seaLevel < 0.58
+        const oceanDetail = seaLevel < materialRules.ocean.transition
           ? sampleMaterialRgb(loaded.deep_ocean, detailU, detailV, distortion)
           : blendRgb(
             sampleMaterialRgb(loaded.deep_ocean, detailU, detailV, distortion),
             sampleMaterialRgb(loaded.shallow_ocean, detailU2, detailV2, distortion),
-            smoothstep(0.58, 1.0, seaLevel),
+            smoothstep(materialRules.ocean.transition, 1.0, seaLevel),
           );
-        const oceanMicro = seaLevel < 0.58
+        const oceanMicro = seaLevel < materialRules.ocean.transition
           ? sampleMaterialRgb(loaded.deep_ocean, microU, microV, distortion * 1.3)
           : blendRgb(
             sampleMaterialRgb(loaded.deep_ocean, microU, microV, distortion * 1.3),
             sampleMaterialRgb(loaded.shallow_ocean, microV, microU, distortion * 1.3),
-            smoothstep(0.58, 1.0, seaLevel),
+            smoothstep(materialRules.ocean.transition, 1.0, seaLevel),
           );
-        broadRgb = seaLevel < 0.58
+        broadRgb = seaLevel < materialRules.ocean.transition
           ? sampleMaterialRgb(loaded.deep_ocean, broadU, broadV, distortion * 0.5)
           : blendRgb(
             sampleMaterialRgb(loaded.deep_ocean, broadU, broadV, distortion * 0.5),
             sampleMaterialRgb(loaded.shallow_ocean, broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.58, 1.0, seaLevel),
+            smoothstep(materialRules.ocean.transition, 1.0, seaLevel),
           );
-        rgb = blendRgb(broadRgb, oceanDetail, 0.44);
-        rgb = applyMaterialDetail(rgb, oceanMicro, 0.16);
+        rgb = blendRgb(broadRgb, oceanDetail, materialRules.ocean.detail_mix);
+        rgb = applyMaterialDetail(rgb, oceanMicro, materialRules.ocean.detail_amount);
         if (polarBlend > 0) {
           rgb = blendRgb(rgb, broadRgb, polarBlend * 0.9);
         }
@@ -251,64 +252,64 @@ export async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
         }
       } else {
         const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
-        const compressed = Math.pow(landLevel, 1.55);
+        const compressed = Math.pow(landLevel, materialRules.land.exponent);
         let detailRgb;
         let microRgb;
-        if (compressed < 0.18) {
+        if (compressed < materialRules.land.coast_end) {
           detailRgb = sampleMaterialRgb(loaded.coast, detailU, detailV, distortion);
           microRgb = sampleMaterialRgb(loaded.coast, microU, microV, distortion * 1.15);
           broadRgb = sampleMaterialRgb(loaded.coast, broadU, broadV, distortion * 0.5);
-        } else if (compressed < 0.58) {
+        } else if (compressed < materialRules.land.lowland_end) {
           detailRgb = blendRgb(
             sampleMaterialRgb(loaded.coast, detailU, detailV, distortion),
             sampleMaterialRgb(loaded.lowland, detailU2, detailV2, distortion),
-            smoothstep(0.18, 0.58, compressed),
+            smoothstep(materialRules.land.coast_end, materialRules.land.lowland_end, compressed),
           );
           microRgb = blendRgb(
             sampleMaterialRgb(loaded.coast, microU, microV, distortion * 1.15),
             sampleMaterialRgb(loaded.lowland, microV, microU, distortion * 1.15),
-            smoothstep(0.18, 0.58, compressed),
+            smoothstep(materialRules.land.coast_end, materialRules.land.lowland_end, compressed),
           );
           broadRgb = blendRgb(
             sampleMaterialRgb(loaded.coast, broadU, broadV, distortion * 0.5),
             sampleMaterialRgb(loaded.lowland, broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.18, 0.58, compressed),
+            smoothstep(materialRules.land.coast_end, materialRules.land.lowland_end, compressed),
           );
-        } else if (compressed < 0.86) {
+        } else if (compressed < materialRules.land.upland_end) {
           detailRgb = blendRgb(
             sampleMaterialRgb(loaded.lowland, detailU, detailV, distortion),
             sampleMaterialRgb(loaded.upland, detailU2, detailV2, distortion),
-            smoothstep(0.58, 0.86, compressed),
+            smoothstep(materialRules.land.lowland_end, materialRules.land.upland_end, compressed),
           );
           microRgb = blendRgb(
             sampleMaterialRgb(loaded.lowland, microU, microV, distortion * 1.15),
             sampleMaterialRgb(loaded.upland, microV, microU, distortion * 1.15),
-            smoothstep(0.58, 0.86, compressed),
+            smoothstep(materialRules.land.lowland_end, materialRules.land.upland_end, compressed),
           );
           broadRgb = blendRgb(
             sampleMaterialRgb(loaded.lowland, broadU, broadV, distortion * 0.5),
             sampleMaterialRgb(loaded.upland, broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.58, 0.86, compressed),
+            smoothstep(materialRules.land.lowland_end, materialRules.land.upland_end, compressed),
           );
         } else {
           detailRgb = blendRgb(
             sampleMaterialRgb(loaded.upland, detailU, detailV, distortion),
             sampleMaterialRgb(loaded.mountain_snow, detailU2, detailV2, distortion),
-            smoothstep(0.86, 1.0, compressed),
+            smoothstep(materialRules.land.upland_end, 1.0, compressed),
           );
           microRgb = blendRgb(
             sampleMaterialRgb(loaded.upland, microU, microV, distortion * 1.15),
             sampleMaterialRgb(loaded.mountain_snow, microV, microU, distortion * 1.15),
-            smoothstep(0.86, 1.0, compressed),
+            smoothstep(materialRules.land.upland_end, 1.0, compressed),
           );
           broadRgb = blendRgb(
             sampleMaterialRgb(loaded.upland, broadU, broadV, distortion * 0.5),
             sampleMaterialRgb(loaded.mountain_snow, broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.86, 1.0, compressed),
+            smoothstep(materialRules.land.upland_end, 1.0, compressed),
           );
         }
-        rgb = blendRgb(broadRgb, detailRgb, 0.48);
-        rgb = applyMaterialDetail(rgb, microRgb, 0.28);
+        rgb = blendRgb(broadRgb, detailRgb, materialRules.land.detail_mix);
+        rgb = applyMaterialDetail(rgb, microRgb, materialRules.land.detail_amount);
         if (polarBlend > 0) {
           rgb = blendRgb(rgb, broadRgb, polarBlend * 0.92);
         }
@@ -322,9 +323,7 @@ export async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
         }
       }
 
-      rgb = tuneMaterialColor(rgb, value < threshold
-        ? { saturation: 1.08, gain: 1.08, lift: 6 }
-        : { saturation: 1.12, gain: 1.07, lift: 5 });
+      rgb = tuneMaterialColor(rgb, value < threshold ? materialRules.ocean.tone : materialRules.land.tone);
 
       const pixel = (y * width + x) * 4;
       image.data[pixel] = rgb[0];

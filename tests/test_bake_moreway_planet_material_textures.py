@@ -7,9 +7,52 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.bake_moreway_planet_material_textures import bake_for_manifest
+from src.moreway_planet_explorer.material_bake_core import build_pixel_context, load_material_bundle
 
 
 class BakeMorewayPlanetMaterialTexturesTests(unittest.TestCase):
+    def test_load_material_bundle_loads_primary_and_poles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in [
+                "deep_ocean",
+                "shallow_ocean",
+                "coast",
+                "lowland",
+                "upland",
+                "mountain_snow",
+                "north_pole",
+                "south_pole",
+            ]:
+                image = Path(root / f"{name}.png")
+                from PIL import Image
+
+                Image.new("RGB", (2, 2), color=(10, 20, 30)).save(image)
+
+            loaded, north_pole, south_pole = load_material_bundle(root)
+
+            self.assertEqual(sorted(loaded.keys()), ["coast", "deep_ocean", "lowland", "mountain_snow", "shallow_ocean", "upland"])
+            self.assertEqual(north_pole.size, (2, 2))
+            self.assertEqual(south_pole.size, (2, 2))
+
+    def test_build_pixel_context_produces_expected_ranges(self) -> None:
+        from PIL import Image
+
+        surface_map = {
+            "lat_steps": 2,
+            "lon_steps": 2,
+            "land_threshold": 128,
+            "values": [0, 64, 192, 255],
+        }
+        pole = Image.new("RGB", (4, 4), color=(10, 20, 30))
+        ctx = build_pixel_context(surface_map, 1, 1, 8, 8, pole, pole)
+
+        self.assertGreaterEqual(ctx.su, 0.0)
+        self.assertGreaterEqual(ctx.sv, 0.0)
+        self.assertGreaterEqual(ctx.value, 0.0)
+        self.assertLessEqual(ctx.value, 255.0)
+        self.assertEqual(len(ctx.pole_rgb), 3)
+
     def test_bake_for_manifest_preserves_existing_baked_textures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

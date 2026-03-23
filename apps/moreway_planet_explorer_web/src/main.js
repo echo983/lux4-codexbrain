@@ -233,6 +233,28 @@ function sampleImageData(imageData, width, height, u, v) {
   ];
 }
 
+function sampleImageDataBilinear(imageData, width, height, u, v) {
+  const x = ((u % 1) + 1) % 1 * width;
+  const y = ((v % 1) + 1) % 1 * height;
+  const x0 = Math.floor(x) % width;
+  const x1 = (x0 + 1) % width;
+  const y0 = Math.floor(y) % height;
+  const y1 = (y0 + 1) % height;
+  const tx = x - Math.floor(x);
+  const ty = y - Math.floor(y);
+
+  const c00 = sampleImageData(imageData, width, height, x0 / width, y0 / height);
+  const c10 = sampleImageData(imageData, width, height, x1 / width, y0 / height);
+  const c01 = sampleImageData(imageData, width, height, x0 / width, y1 / height);
+  const c11 = sampleImageData(imageData, width, height, x1 / width, y1 / height);
+
+  return [
+    Math.round((c00[0] * (1 - tx) + c10[0] * tx) * (1 - ty) + (c01[0] * (1 - tx) + c11[0] * tx) * ty),
+    Math.round((c00[1] * (1 - tx) + c10[1] * tx) * (1 - ty) + (c01[1] * (1 - tx) + c11[1] * tx) * ty),
+    Math.round((c00[2] * (1 - tx) + c10[2] * tx) * (1 - ty) + (c01[2] * (1 - tx) + c11[2] * tx) * ty),
+  ];
+}
+
 function sampleSurfaceValueBilinear(surfaceMap, u, v) {
   const width = surfaceMap.lon_steps;
   const height = surfaceMap.lat_steps;
@@ -269,39 +291,124 @@ function blendRgb(a, b, t) {
   ];
 }
 
+function multiplyRgb(a, b) {
+  return [
+    Math.round((a[0] * b[0]) / 255),
+    Math.round((a[1] * b[1]) / 255),
+    Math.round((a[2] * b[2]) / 255),
+  ];
+}
+
+function luminance(rgb) {
+  return (rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114) / 255;
+}
+
+async function loadMaterialVariants(materialBasePath, key, variantCount = 3) {
+  const variants = [];
+  for (let index = 0; index < variantCount; index += 1) {
+    const suffix = index === 0 ? '' : `_${String(index + 1).padStart(2, '0')}`;
+    const url = `${materialBasePath}/${key}${suffix}.png`;
+    try {
+      const img = await loadImage(url);
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      variants.push({
+        width: img.width,
+        height: img.height,
+        data: ctx.getImageData(0, 0, img.width, img.height).data,
+      });
+    } catch {
+      if (index === 0) {
+        throw new Error(`failed to load base material texture: ${url}`);
+      }
+    }
+  }
+  return variants;
+}
+
 function smoothstep(edge0, edge1, x) {
   const t = Math.max(0, Math.min(1, (x - edge0) / Math.max(edge1 - edge0, 1e-6)));
   return t * t * (3 - 2 * t);
 }
 
-async function buildPlanetMaterialTexture(surfaceMap) {
-  const materials = {
-    deep_ocean: '/var/openai_image_experiments/materials/deep_ocean.png',
-    shallow_ocean: '/var/openai_image_experiments/materials/shallow_ocean.png',
-    coast: '/var/openai_image_experiments/materials/coast.png',
-    lowland: '/var/openai_image_experiments/materials/lowland.png',
-    upland: '/var/openai_image_experiments/materials/upland.png',
-    mountain_snow: '/var/openai_image_experiments/materials/mountain_snow.png',
-    north_pole: '/var/openai_image_experiments/materials/north_pole.png',
-    south_pole: '/var/openai_image_experiments/materials/south_pole.png',
-  };
+function sampleVariant(texture, u, v, distortion = 0) {
+  const base = sampleImageDataBilinear(texture.data, texture.width, texture.height, u, v);
+  const shifted = sampleImageDataBilinear(
+    texture.data,
+    texture.width,
+    texture.height,
+    u + 0.37 + distortion * 0.11,
+    v + 0.21 - distortion * 0.07,
+  );
+  const skewed = sampleImageDataBilinear(
+    texture.data,
+    texture.width,
+    texture.height,
+    u * 0.83 - v * 0.17 + 0.19 + distortion * 0.05,
+    v * 0.79 + u * 0.19 + 0.13 - distortion * 0.03,
+  );
+  return blendRgb(blendRgb(base, shifted, 0.34), skewed, 0.18);
+}
 
-  const loaded = {};
-  for (const [key, url] of Object.entries(materials)) {
-    const img = await loadImage(url);
-    const c = document.createElement('canvas');
-    c.width = img.width;
-    c.height = img.height;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    loaded[key] = {
-      width: img.width,
-      height: img.height,
-      data: ctx.getImageData(0, 0, img.width, img.height).data,
-    };
+function sampleMaterialRgb(textures, u, v, distortion = 0) {
+  const variants = Array.isArray(textures) ? textures : [textures];
+  if (variants.length === 1) {
+    return sampleVariant(variants[0], u, v, distortion);
   }
+  const centerWeight = (x, y) => {
+    const fx = 1 - Math.abs((((x % 1) + 1) % 1) - 0.5) * 2;
+    const fy = 1 - Math.abs((((y % 1) + 1) % 1) - 0.5) * 2;
+    return Math.max(0, fx) * Math.max(0, fy);
+  };
+  let accum = [0, 0, 0];
+  let total = 0;
+  variants.forEach((texture, index) => {
+    const offsetU = u + index * 0.173 + distortion * (0.04 + index * 0.01);
+    const offsetV = v + index * 0.127 - distortion * (0.03 + index * 0.008);
+    const sample = sampleVariant(texture, offsetU, offsetV, distortion * (1 + index * 0.15));
+    const weight = 0.18 + centerWeight(offsetU, offsetV);
+    accum = [
+      accum[0] + sample[0] * weight,
+      accum[1] + sample[1] * weight,
+      accum[2] + sample[2] * weight,
+    ];
+    total += weight;
+  });
+  return [
+    Math.round(accum[0] / Math.max(total, 1e-6)),
+    Math.round(accum[1] / Math.max(total, 1e-6)),
+    Math.round(accum[2] / Math.max(total, 1e-6)),
+  ];
+}
 
-  const scale = 16;
+function applyMaterialDetail(baseRgb, detailRgb, amount = 0.25) {
+  const detailLuma = luminance(detailRgb);
+  const neutralized = blendRgb([128, 128, 128], detailRgb, 0.82);
+  const multiplied = multiplyRgb(baseRgb, neutralized);
+  const contrastAmount = Math.max(0, Math.min(1, amount * (0.55 + Math.abs(detailLuma - 0.5) * 0.7)));
+  return blendRgb(baseRgb, multiplied, contrastAmount);
+}
+
+function tuneMaterialColor(rgb, { saturation = 1.1, gain = 1.06, lift = 4 } = {}) {
+  const luma = luminance(rgb) * 255;
+  const lifted = rgb.map((channel) => channel * gain + lift);
+  const tuned = lifted.map((channel) => luma + (channel - luma) * saturation);
+  return tuned.map((channel) => Math.max(0, Math.min(255, Math.round(channel))));
+}
+
+async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
+  const materialKeys = ['deep_ocean', 'shallow_ocean', 'coast', 'lowland', 'upland', 'mountain_snow'];
+  const loadedEntries = await Promise.all([
+    ...materialKeys.map(async (key) => [key, await loadMaterialVariants(materialBasePath, key, 3)]),
+    ['north_pole', (await loadMaterialVariants(materialBasePath, 'north_pole', 1))[0]],
+    ['south_pole', (await loadMaterialVariants(materialBasePath, 'south_pole', 1))[0]],
+  ]);
+  const loaded = Object.fromEntries(loadedEntries);
+
+  const scale = 12;
   const width = surfaceMap.lon_steps * scale;
   const height = surfaceMap.lat_steps * scale;
   const threshold = surfaceMap.land_threshold;
@@ -334,30 +441,42 @@ async function buildPlanetMaterialTexture(surfaceMap) {
       const detailV = sv * 4.5 + su * 0.35;
       const detailU2 = su * 12.0 - sv * 0.9;
       const detailV2 = sv * 8.0 + su * 0.6;
+      const microU = su * 22.0 + sv * 1.4;
+      const microV = sv * 18.0 - su * 1.1;
       const broadU = su * 1.6 + sv * 0.15;
       const broadV = sv * 1.4 + su * 0.08;
       const broadU2 = su * 2.4 - sv * 0.18;
       const broadV2 = sv * 2.0 + su * 0.11;
+      const distortion = Math.sin((su * 7.0 + sv * 3.0) * Math.PI * 2) * 0.5
+        + Math.cos((su * 4.0 - sv * 5.0) * Math.PI * 2) * 0.5;
 
       let rgb;
       let broadRgb;
       if (value < threshold) {
         const seaLevel = value / Math.max(threshold, 1);
-        const oceanBase = seaLevel < 0.58
-          ? sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, detailU, detailV)
+        const oceanDetail = seaLevel < 0.58
+          ? sampleMaterialRgb(loaded.deep_ocean, detailU, detailV, distortion)
           : blendRgb(
-            sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, detailU, detailV),
-            sampleImageData(loaded.shallow_ocean.data, loaded.shallow_ocean.width, loaded.shallow_ocean.height, detailU2, detailV2),
+            sampleMaterialRgb(loaded.deep_ocean, detailU, detailV, distortion),
+            sampleMaterialRgb(loaded.shallow_ocean, detailU2, detailV2, distortion),
             smoothstep(0.58, 1.0, seaLevel),
           );
-        rgb = oceanBase;
+        const oceanMicro = seaLevel < 0.58
+          ? sampleMaterialRgb(loaded.deep_ocean, microU, microV, distortion * 1.3)
+          : blendRgb(
+            sampleMaterialRgb(loaded.deep_ocean, microU, microV, distortion * 1.3),
+            sampleMaterialRgb(loaded.shallow_ocean, microV, microU, distortion * 1.3),
+            smoothstep(0.58, 1.0, seaLevel),
+          );
         broadRgb = seaLevel < 0.58
-          ? sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, broadU, broadV)
+          ? sampleMaterialRgb(loaded.deep_ocean, broadU, broadV, distortion * 0.5)
           : blendRgb(
-            sampleImageData(loaded.deep_ocean.data, loaded.deep_ocean.width, loaded.deep_ocean.height, broadU, broadV),
-            sampleImageData(loaded.shallow_ocean.data, loaded.shallow_ocean.width, loaded.shallow_ocean.height, broadU2, broadV2),
+            sampleMaterialRgb(loaded.deep_ocean, broadU, broadV, distortion * 0.5),
+            sampleMaterialRgb(loaded.shallow_ocean, broadU2, broadV2, distortion * 0.5),
             smoothstep(0.58, 1.0, seaLevel),
           );
+        rgb = blendRgb(broadRgb, oceanDetail, 0.44);
+        rgb = applyMaterialDetail(rgb, oceanMicro, 0.16);
         if (polarBlend > 0) {
           rgb = blendRgb(rgb, broadRgb, polarBlend * 0.9);
         }
@@ -371,43 +490,63 @@ async function buildPlanetMaterialTexture(surfaceMap) {
       } else {
         const landLevel = (value - threshold) / Math.max(255 - threshold, 1);
         const compressed = Math.pow(landLevel, 1.55);
+        let detailRgb;
+        let microRgb;
         if (compressed < 0.14) {
-          rgb = sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, detailU, detailV);
-          broadRgb = sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, broadU, broadV);
+          detailRgb = sampleMaterialRgb(loaded.coast, detailU, detailV, distortion);
+          microRgb = sampleMaterialRgb(loaded.coast, microU, microV, distortion * 1.15);
+          broadRgb = sampleMaterialRgb(loaded.coast, broadU, broadV, distortion * 0.5);
         } else if (compressed < 0.48) {
-          rgb = blendRgb(
-            sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, detailU, detailV),
-            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, detailU2, detailV2),
+          detailRgb = blendRgb(
+            sampleMaterialRgb(loaded.coast, detailU, detailV, distortion),
+            sampleMaterialRgb(loaded.lowland, detailU2, detailV2, distortion),
+            smoothstep(0.14, 0.48, compressed),
+          );
+          microRgb = blendRgb(
+            sampleMaterialRgb(loaded.coast, microU, microV, distortion * 1.15),
+            sampleMaterialRgb(loaded.lowland, microV, microU, distortion * 1.15),
             smoothstep(0.14, 0.48, compressed),
           );
           broadRgb = blendRgb(
-            sampleImageData(loaded.coast.data, loaded.coast.width, loaded.coast.height, broadU, broadV),
-            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, broadU2, broadV2),
+            sampleMaterialRgb(loaded.coast, broadU, broadV, distortion * 0.5),
+            sampleMaterialRgb(loaded.lowland, broadU2, broadV2, distortion * 0.5),
             smoothstep(0.14, 0.48, compressed),
           );
         } else if (compressed < 0.78) {
-          rgb = blendRgb(
-            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, detailU, detailV),
-            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, detailU2, detailV2),
+          detailRgb = blendRgb(
+            sampleMaterialRgb(loaded.lowland, detailU, detailV, distortion),
+            sampleMaterialRgb(loaded.upland, detailU2, detailV2, distortion),
+            smoothstep(0.48, 0.78, compressed),
+          );
+          microRgb = blendRgb(
+            sampleMaterialRgb(loaded.lowland, microU, microV, distortion * 1.15),
+            sampleMaterialRgb(loaded.upland, microV, microU, distortion * 1.15),
             smoothstep(0.48, 0.78, compressed),
           );
           broadRgb = blendRgb(
-            sampleImageData(loaded.lowland.data, loaded.lowland.width, loaded.lowland.height, broadU, broadV),
-            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, broadU2, broadV2),
+            sampleMaterialRgb(loaded.lowland, broadU, broadV, distortion * 0.5),
+            sampleMaterialRgb(loaded.upland, broadU2, broadV2, distortion * 0.5),
             smoothstep(0.48, 0.78, compressed),
           );
         } else {
-          rgb = blendRgb(
-            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, detailU, detailV),
-            sampleImageData(loaded.mountain_snow.data, loaded.mountain_snow.width, loaded.mountain_snow.height, detailU2, detailV2),
+          detailRgb = blendRgb(
+            sampleMaterialRgb(loaded.upland, detailU, detailV, distortion),
+            sampleMaterialRgb(loaded.mountain_snow, detailU2, detailV2, distortion),
+            smoothstep(0.78, 1.0, compressed),
+          );
+          microRgb = blendRgb(
+            sampleMaterialRgb(loaded.upland, microU, microV, distortion * 1.15),
+            sampleMaterialRgb(loaded.mountain_snow, microV, microU, distortion * 1.15),
             smoothstep(0.78, 1.0, compressed),
           );
           broadRgb = blendRgb(
-            sampleImageData(loaded.upland.data, loaded.upland.width, loaded.upland.height, broadU, broadV),
-            sampleImageData(loaded.mountain_snow.data, loaded.mountain_snow.width, loaded.mountain_snow.height, broadU2, broadV2),
+            sampleMaterialRgb(loaded.upland, broadU, broadV, distortion * 0.5),
+            sampleMaterialRgb(loaded.mountain_snow, broadU2, broadV2, distortion * 0.5),
             smoothstep(0.78, 1.0, compressed),
           );
         }
+        rgb = blendRgb(broadRgb, detailRgb, 0.48);
+        rgb = applyMaterialDetail(rgb, microRgb, 0.28);
         if (polarBlend > 0) {
           rgb = blendRgb(rgb, broadRgb, polarBlend * 0.92);
         }
@@ -420,6 +559,10 @@ async function buildPlanetMaterialTexture(surfaceMap) {
           rgb = blendRgb(rgb, polarLand, polarBlend * 0.88);
         }
       }
+
+      rgb = tuneMaterialColor(rgb, value < threshold
+        ? { saturation: 1.08, gain: 1.08, lift: 6 }
+        : { saturation: 1.12, gain: 1.07, lift: 5 });
 
       const pixel = (y * width + x) * 4;
       image.data[pixel] = rgb[0];
@@ -456,6 +599,7 @@ const textureLoader = new THREE.TextureLoader();
 const textureCache = new Map();
 let baseSurfaceTexture = null;
 let openaiMaterialTexture = null;
+let cloudflareMaterialTexture = null;
 let currentTextureMode = 'openai_materials';
 const topFocusHighlight = new THREE.Points(
   new THREE.BufferGeometry(),
@@ -689,6 +833,15 @@ async function loadExternalTexture(url) {
   return texture;
 }
 
+function bakedTextureUrl(mode) {
+  const relative = manifest?.planet?.baked_textures?.[mode];
+  if (relative) {
+    return `${DATASET_BASE}/${relative}`;
+  }
+  if (!manifest?.build_id) return '';
+  return `${DATASET_BASE}/builds/${manifest.build_id}/textures/${mode}.png`;
+}
+
 async function applyPlanetTextureMode(mode) {
   currentTextureMode = mode;
   try {
@@ -704,15 +857,47 @@ async function applyPlanetTextureMode(mode) {
         throw new Error('surface_map unavailable');
       }
       if (!openaiMaterialTexture) {
-        openaiMaterialTexture = await buildPlanetMaterialTexture(manifest.planet.surface_map);
+        const bakedUrl = bakedTextureUrl('openai_materials');
+        if (bakedUrl) {
+          setStatus('正在加载 OpenAI 预烘焙地表材质…');
+          openaiMaterialTexture = await loadExternalTexture(bakedUrl);
+        } else {
+          setStatus('正在构建 OpenAI 地表材质…');
+          openaiMaterialTexture = await buildPlanetMaterialTexture(
+            manifest.planet.surface_map,
+            '/var/openai_image_experiments/materials',
+          );
+        }
       }
       if (currentTextureMode !== mode) return;
       planet.material.map = openaiMaterialTexture;
       planet.material.needsUpdate = true;
       return;
     }
+    if (mode === 'cloudflare_materials') {
+      if (!manifest?.planet?.surface_map) {
+        throw new Error('surface_map unavailable');
+      }
+      if (!cloudflareMaterialTexture) {
+        const bakedUrl = bakedTextureUrl('cloudflare_materials');
+        if (bakedUrl) {
+          setStatus('正在加载 Cloudflare 预烘焙地表材质…');
+          cloudflareMaterialTexture = await loadExternalTexture(bakedUrl);
+        } else {
+          setStatus('正在构建 Cloudflare 地表材质…');
+          cloudflareMaterialTexture = await buildPlanetMaterialTexture(
+            manifest.planet.surface_map,
+            '/var/cloudflare_image_experiments/materials',
+          );
+        }
+      }
+      if (currentTextureMode !== mode) return;
+      planet.material.map = cloudflareMaterialTexture;
+      planet.material.needsUpdate = true;
+      return;
+    }
   } catch (error) {
-    setStatus(`OpenAI 材质不可用，已降级原始贴图：${error.message}`);
+    setStatus(`${mode === 'cloudflare_materials' ? 'Cloudflare' : 'OpenAI'} 材质不可用，已降级原始贴图：${error.message}`);
     currentTextureMode = 'surface_map';
     if (planetTextureModeEl) {
       planetTextureModeEl.value = 'surface_map';

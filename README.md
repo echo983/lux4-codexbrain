@@ -47,6 +47,11 @@
   - `nfs打包交付`
 - 已实现在线 Keep 搜索服务：
   - [moreway_search_service](/root/lux4-codexbrain/src/moreway_search_service/__main__.py)
+- 已实现 `Moreway Planet` 数据集与材质处理链：
+  - [build_moreway_planet_dataset.py](/root/lux4-codexbrain/scripts/build_moreway_planet_dataset.py)
+  - [bake_moreway_planet_material_textures.py](/root/lux4-codexbrain/scripts/bake_moreway_planet_material_textures.py)
+  - [moreway-planet-explorer.md](/root/lux4-codexbrain/docs/moreway-planet-explorer.md)
+  - [moreway-planet-material-pipeline.md](/root/lux4-codexbrain/docs/moreway-planet-material-pipeline.md)
 - 已实现能力可用性状态报告：
   - [capability_status_report.py](/root/lux4-codexbrain/scripts/capability_status_report.py)
 
@@ -154,6 +159,50 @@ python3 scripts/capability_status_report.py --output-dir var/capability_status -
 
 - 这是轻量可用性检查，不默认执行会产生额外费用的深度远程探测。
 - 当前会把 `agent_enqueue_message` 在非 agent runtime 环境里标为 `degraded`，这属于正常现象。
+
+---
+
+## Moreway Planet
+
+`Moreway Planet` 现在采用正式分层流程，而不是页面打开时现场拼整张地表贴图。
+
+处理分为三层：
+
+1. 数据层
+- LanceDB 向量
+- UMAP 降维
+- 球壳映射
+- 社区聚类与大陆生成
+- `surface_map`
+
+2. 材质源层
+- OpenAI 材质源
+- Cloudflare FLUX 材质源
+
+3. 预烘焙层
+- 将 `surface_map` 和材质瓦片离线烘焙为最终 planet texture PNG
+- 前端优先直接读取缓存 PNG
+
+正式脚本：
+
+- 数据集构建：
+  - [build_moreway_planet_dataset.py](/root/lux4-codexbrain/scripts/build_moreway_planet_dataset.py)
+- 贴图预烘焙：
+  - [bake_moreway_planet_material_textures.py](/root/lux4-codexbrain/scripts/bake_moreway_planet_material_textures.py)
+- Cloudflare 材质生成：
+  - [cloudflare_flux_image_generate.py](/root/lux4-codexbrain/scripts/cloudflare_flux_image_generate.py)
+  - [cloudflare_planet_material_set_experiment.py](/root/lux4-codexbrain/scripts/cloudflare_planet_material_set_experiment.py)
+
+正式说明文档：
+
+- [moreway-planet-explorer.md](/root/lux4-codexbrain/docs/moreway-planet-explorer.md)
+- [moreway-planet-material-pipeline.md](/root/lux4-codexbrain/docs/moreway-planet-material-pipeline.md)
+
+说明：
+
+- 数据变化后，planet dataset 与预烘焙贴图应离线重建。
+- 只要材质源不变，就不需要重新调用图像模型付费。
+- 运行时现算现在只是回退路径，不是默认主路径。
 
 ---
 

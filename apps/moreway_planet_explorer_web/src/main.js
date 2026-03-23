@@ -492,57 +492,57 @@ async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
         const compressed = Math.pow(landLevel, 1.55);
         let detailRgb;
         let microRgb;
-        if (compressed < 0.14) {
+        if (compressed < 0.18) {
           detailRgb = sampleMaterialRgb(loaded.coast, detailU, detailV, distortion);
           microRgb = sampleMaterialRgb(loaded.coast, microU, microV, distortion * 1.15);
           broadRgb = sampleMaterialRgb(loaded.coast, broadU, broadV, distortion * 0.5);
-        } else if (compressed < 0.48) {
+        } else if (compressed < 0.58) {
           detailRgb = blendRgb(
             sampleMaterialRgb(loaded.coast, detailU, detailV, distortion),
             sampleMaterialRgb(loaded.lowland, detailU2, detailV2, distortion),
-            smoothstep(0.14, 0.48, compressed),
+            smoothstep(0.18, 0.58, compressed),
           );
           microRgb = blendRgb(
             sampleMaterialRgb(loaded.coast, microU, microV, distortion * 1.15),
             sampleMaterialRgb(loaded.lowland, microV, microU, distortion * 1.15),
-            smoothstep(0.14, 0.48, compressed),
+            smoothstep(0.18, 0.58, compressed),
           );
           broadRgb = blendRgb(
             sampleMaterialRgb(loaded.coast, broadU, broadV, distortion * 0.5),
             sampleMaterialRgb(loaded.lowland, broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.14, 0.48, compressed),
+            smoothstep(0.18, 0.58, compressed),
           );
-        } else if (compressed < 0.78) {
+        } else if (compressed < 0.86) {
           detailRgb = blendRgb(
             sampleMaterialRgb(loaded.lowland, detailU, detailV, distortion),
             sampleMaterialRgb(loaded.upland, detailU2, detailV2, distortion),
-            smoothstep(0.48, 0.78, compressed),
+            smoothstep(0.58, 0.86, compressed),
           );
           microRgb = blendRgb(
             sampleMaterialRgb(loaded.lowland, microU, microV, distortion * 1.15),
             sampleMaterialRgb(loaded.upland, microV, microU, distortion * 1.15),
-            smoothstep(0.48, 0.78, compressed),
+            smoothstep(0.58, 0.86, compressed),
           );
           broadRgb = blendRgb(
             sampleMaterialRgb(loaded.lowland, broadU, broadV, distortion * 0.5),
             sampleMaterialRgb(loaded.upland, broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.48, 0.78, compressed),
+            smoothstep(0.58, 0.86, compressed),
           );
         } else {
           detailRgb = blendRgb(
             sampleMaterialRgb(loaded.upland, detailU, detailV, distortion),
             sampleMaterialRgb(loaded.mountain_snow, detailU2, detailV2, distortion),
-            smoothstep(0.78, 1.0, compressed),
+            smoothstep(0.86, 1.0, compressed),
           );
           microRgb = blendRgb(
             sampleMaterialRgb(loaded.upland, microU, microV, distortion * 1.15),
             sampleMaterialRgb(loaded.mountain_snow, microV, microU, distortion * 1.15),
-            smoothstep(0.78, 1.0, compressed),
+            smoothstep(0.86, 1.0, compressed),
           );
           broadRgb = blendRgb(
             sampleMaterialRgb(loaded.upland, broadU, broadV, distortion * 0.5),
             sampleMaterialRgb(loaded.mountain_snow, broadU2, broadV2, distortion * 0.5),
-            smoothstep(0.78, 1.0, compressed),
+            smoothstep(0.86, 1.0, compressed),
           );
         }
         rgb = blendRgb(broadRgb, detailRgb, 0.48);
@@ -599,8 +599,7 @@ const textureLoader = new THREE.TextureLoader();
 const textureCache = new Map();
 let baseSurfaceTexture = null;
 let openaiMaterialTexture = null;
-let cloudflareMaterialTexture = null;
-let currentTextureMode = 'openai_materials';
+let currentTextureMode = 'surface_map';
 const topFocusHighlight = new THREE.Points(
   new THREE.BufferGeometry(),
   new THREE.PointsMaterial({
@@ -874,30 +873,9 @@ async function applyPlanetTextureMode(mode) {
       planet.material.needsUpdate = true;
       return;
     }
-    if (mode === 'cloudflare_materials') {
-      if (!manifest?.planet?.surface_map) {
-        throw new Error('surface_map unavailable');
-      }
-      if (!cloudflareMaterialTexture) {
-        const bakedUrl = bakedTextureUrl('cloudflare_materials');
-        if (bakedUrl) {
-          setStatus('正在加载 Cloudflare 预烘焙地表材质…');
-          cloudflareMaterialTexture = await loadExternalTexture(bakedUrl);
-        } else {
-          setStatus('正在构建 Cloudflare 地表材质…');
-          cloudflareMaterialTexture = await buildPlanetMaterialTexture(
-            manifest.planet.surface_map,
-            '/var/cloudflare_image_experiments/materials',
-          );
-        }
-      }
-      if (currentTextureMode !== mode) return;
-      planet.material.map = cloudflareMaterialTexture;
-      planet.material.needsUpdate = true;
-      return;
-    }
+    throw new Error(`unknown texture mode: ${mode}`);
   } catch (error) {
-    setStatus(`${mode === 'cloudflare_materials' ? 'Cloudflare' : 'OpenAI'} 材质不可用，已降级原始贴图：${error.message}`);
+    setStatus(`OpenAI 材质不可用，已降级原始贴图：${error.message}`);
     currentTextureMode = 'surface_map';
     if (planetTextureModeEl) {
       planetTextureModeEl.value = 'surface_map';

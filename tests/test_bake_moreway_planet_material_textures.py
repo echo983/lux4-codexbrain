@@ -43,25 +43,17 @@ class BakeMorewayPlanetMaterialTexturesTests(unittest.TestCase):
                     Path(path).write_bytes(b"fake")
 
             with patch("scripts.bake_moreway_planet_material_textures.bake_texture", return_value=FakeImage()):
-                baked = bake_for_manifest(manifest_path, modes=["cloudflare_materials"])
+                baked = bake_for_manifest(manifest_path, modes=["openai_materials"])
 
             self.assertEqual(
                 baked["openai_materials"],
                 "builds/build-1/textures/openai_materials.png",
-            )
-            self.assertEqual(
-                baked["cloudflare_materials"],
-                "builds/build-1/textures/cloudflare_materials.png",
             )
 
             written = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 written["planet"]["baked_textures"]["openai_materials"],
                 "builds/build-1/textures/openai_materials.png",
-            )
-            self.assertEqual(
-                written["planet"]["baked_textures"]["cloudflare_materials"],
-                "builds/build-1/textures/cloudflare_materials.png",
             )
 
 

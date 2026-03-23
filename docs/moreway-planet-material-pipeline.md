@@ -5,7 +5,7 @@
 ## 目标
 
 - 地貌真相来自知识库数据，而不是图像模型自由发挥
-- 视觉材质可以来自不同模型源，例如 OpenAI 或 Cloudflare FLUX
+- 视觉材质当前正式只使用 OpenAI 材质源
 - 页面打开时优先秒级加载预烘焙贴图，不把重计算压到用户首屏
 
 ## 分层职责
@@ -31,12 +31,10 @@
 
 负责生成可复用的地形材质瓦片，不决定大陆形状。
 
-当前有两套正式材质源：
+当前正式材质源：
 
 - OpenAI 材质源
   - 目录：`var/openai_image_experiments/materials/`
-- Cloudflare FLUX 材质源
-  - 目录：`var/cloudflare_image_experiments/materials/`
 
 当前使用的材质类别：
 
@@ -55,15 +53,10 @@
 - `deep_ocean_02.png`
 - `deep_ocean_03.png`
 
-Cloudflare 正式生成脚本：
+OpenAI 材质源生成与实验：
 
-- [cloudflare_flux_image_generate.py](/root/lux4-codexbrain/scripts/cloudflare_flux_image_generate.py)
-- [cloudflare_planet_material_set_experiment.py](/root/lux4-codexbrain/scripts/cloudflare_planet_material_set_experiment.py)
-
-说明：
-
-- 虽然文件名里保留了 `experiment`，但当前这条链已经被正式纳入处理流程。
-- 这些脚本的职责已经稳定，不再只是一次性 smoke。
+- [openai_image_generate.py](/root/lux4-codexbrain/scripts/openai_image_generate.py)
+- [openai_planet_texture_experiment.py](/root/lux4-codexbrain/scripts/openai_planet_texture_experiment.py)
 
 ### 3. 离线预烘焙层
 
@@ -81,7 +74,6 @@ Cloudflare 正式生成脚本：
 输出位置：
 
 - `var/moreway_planet_dataset/builds/<build_id>/textures/openai_materials.png`
-- `var/moreway_planet_dataset/builds/<build_id>/textures/cloudflare_materials.png`
 
 同时会把贴图路径回写到：
 
@@ -133,7 +125,7 @@ Cloudflare 正式生成脚本：
 
 - 只需要重新构建 dataset
 - 只需要重新烘焙最终贴图
-- 不需要重新调用 OpenAI / Cloudflare 生成材质瓦片
+- 不需要重新调用 OpenAI 生成材质瓦片
 
 只有在你想重新做材质源时，才需要重新付模型调用成本。
 
@@ -146,12 +138,6 @@ Cloudflare 正式生成脚本：
 如果不可用：
 
 - 自动降级到 `原始贴图`
-
-前端也支持：
-
-- `Cloudflare 材质`
-
-用于效果对比。
 
 ## 为什么这样设计
 

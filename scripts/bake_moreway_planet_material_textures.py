@@ -14,7 +14,6 @@ DATASET_ROOT = REPO_ROOT / "var" / "moreway_planet_dataset"
 
 MATERIAL_SOURCES = {
     "openai_materials": REPO_ROOT / "var" / "openai_image_experiments" / "materials",
-    "cloudflare_materials": REPO_ROOT / "var" / "cloudflare_image_experiments" / "materials",
 }
 PRIMARY_KEYS = ["deep_ocean", "shallow_ocean", "coast", "lowland", "upland", "mountain_snow"]
 
@@ -231,12 +230,12 @@ def bake_texture(surface_map: dict, material_root: Path, scale: int = 12) -> Ima
             else:
                 land_level = (value - threshold) / max(255.0 - threshold, 1.0)
                 compressed = land_level ** 1.55
-                if compressed < 0.14:
+                if compressed < 0.18:
                     detail_rgb = sample_material(loaded["coast"], detail_u, detail_v, distortion)
                     micro_rgb = sample_material(loaded["coast"], micro_u, micro_v, distortion * 1.15)
                     broad_rgb = sample_material(loaded["coast"], broad_u, broad_v, distortion * 0.5)
-                elif compressed < 0.48:
-                    t = smoothstep(0.14, 0.48, compressed)
+                elif compressed < 0.58:
+                    t = smoothstep(0.18, 0.58, compressed)
                     detail_rgb = blend_rgb(
                         sample_material(loaded["coast"], detail_u, detail_v, distortion),
                         sample_material(loaded["lowland"], detail_u2, detail_v2, distortion),
@@ -252,8 +251,8 @@ def bake_texture(surface_map: dict, material_root: Path, scale: int = 12) -> Ima
                         sample_material(loaded["lowland"], broad_u2, broad_v2, distortion * 0.5),
                         t,
                     )
-                elif compressed < 0.78:
-                    t = smoothstep(0.48, 0.78, compressed)
+                elif compressed < 0.86:
+                    t = smoothstep(0.58, 0.86, compressed)
                     detail_rgb = blend_rgb(
                         sample_material(loaded["lowland"], detail_u, detail_v, distortion),
                         sample_material(loaded["upland"], detail_u2, detail_v2, distortion),
@@ -270,7 +269,7 @@ def bake_texture(surface_map: dict, material_root: Path, scale: int = 12) -> Ima
                         t,
                     )
                 else:
-                    t = smoothstep(0.78, 1.0, compressed)
+                    t = smoothstep(0.86, 1.0, compressed)
                     detail_rgb = blend_rgb(
                         sample_material(loaded["upland"], detail_u, detail_v, distortion),
                         sample_material(loaded["mountain_snow"], detail_u2, detail_v2, distortion),

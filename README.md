@@ -177,7 +177,6 @@ python3 scripts/capability_status_report.py --output-dir var/capability_status -
 
 2. 材质源层
 - OpenAI 材质源
-- Cloudflare FLUX 材质源
 
 3. 预烘焙层
 - 将 `surface_map` 和材质瓦片离线烘焙为最终 planet texture PNG
@@ -193,9 +192,6 @@ python3 scripts/capability_status_report.py --output-dir var/capability_status -
   - [bake_moreway_planet_material_textures.py](/root/lux4-codexbrain/scripts/bake_moreway_planet_material_textures.py)
 - 状态检查：
   - [check_moreway_planet_status.py](/root/lux4-codexbrain/scripts/check_moreway_planet_status.py)
-- Cloudflare 材质生成：
-  - [cloudflare_flux_image_generate.py](/root/lux4-codexbrain/scripts/cloudflare_flux_image_generate.py)
-  - [cloudflare_planet_material_set_experiment.py](/root/lux4-codexbrain/scripts/cloudflare_planet_material_set_experiment.py)
 
 正式说明文档：
 

@@ -44,7 +44,7 @@ python3 scripts/check_moreway_planet_status.py
 - `source_signature`
 - 文档数和 chunk 数
 - `surface_map` 是否存在
-- `openai_materials` / `cloudflare_materials` 贴图缓存是否存在
+- `openai_materials` 贴图缓存是否存在
 - 前端是否能通过 HTTP 访问关键资源
 
 ## 4. 关键文件
@@ -76,7 +76,6 @@ python3 scripts/check_moreway_planet_status.py
 缓存贴图：
 
 - `var/moreway_planet_dataset/builds/<build_id>/textures/openai_materials.png`
-- `var/moreway_planet_dataset/builds/<build_id>/textures/cloudflare_materials.png`
 
 ## 5. 什么时候需要重新付模型费用
 
@@ -85,7 +84,6 @@ python3 scripts/check_moreway_planet_status.py
 例如：
 
 - 重新生成 OpenAI 材质瓦片
-- 重新生成 Cloudflare FLUX 材质瓦片
 - 更换视觉风格
 
 如果只是知识数据变化：

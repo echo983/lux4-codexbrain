@@ -1,0 +1,34 @@
+{
+  "variant_count": 3,
+  "texture_scale": 12,
+  "polar": {
+    "blend_start": 0.72,
+    "blend_end": 0.96,
+    "cap_start": 0.84,
+    "cap_end": 1.0,
+    "extent": 0.28
+  },
+  "ocean": {
+    "transition": 0.58,
+    "detail_mix": 0.44,
+    "detail_amount": 0.16,
+    "tone": {
+      "saturation": 1.08,
+      "gain": 1.08,
+      "lift": 6
+    }
+  },
+  "land": {
+    "exponent": 1.55,
+    "coast_end": 0.18,
+    "lowland_end": 0.58,
+    "upland_end": 0.86,
+    "detail_mix": 0.48,
+    "detail_amount": 0.28,
+    "tone": {
+      "saturation": 1.12,
+      "gain": 1.07,
+      "lift": 5
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import materialRules from './material_rules.json' with { type: 'json' };
 import {
   BAKE_CHANNELS,
   DEFAULT_TEXTURE_MODE,
@@ -12,6 +13,8 @@ export function createMaterialRuntime({
   planet,
   textureLoader,
   buildPlanetMaterialTexture,
+  createPlanetShaderMaterial,
+  createSurfaceDataTexture,
   setStatus,
   onFallbackMode,
 }) {
@@ -19,6 +22,9 @@ export function createMaterialRuntime({
   let baseSurfaceTexture = null;
   let openaiMaterialTextures = null;
   let currentTextureMode = DEFAULT_TEXTURE_MODE;
+  
+  const originalMaterial = planet.material;
+  let shaderMaterial = null;
 
   async function loadExternalTexture(url, { colorSpace = THREE.NoColorSpace } = {}) {
     const cacheKey = `${url}::${colorSpace}`;
@@ -41,6 +47,9 @@ export function createMaterialRuntime({
   }
 
   function applyTextureSet(textureSet) {
+    if (planet.material !== originalMaterial) {
+      planet.material = originalMaterial;
+    }
     BAKE_CHANNELS.forEach(({ materialProperty, channel }) => {
       planet.material[materialProperty] = textureSet?.[channel] ?? null;
     });
@@ -71,13 +80,30 @@ export function createMaterialRuntime({
 
   async function loadTextureMode(mode) {
     const spec = getTextureModeSpec(mode);
-    if (mode === 'surface_map') {
-      return baseSurfaceTexture ? { albedo: baseSurfaceTexture } : null;
-    }
     const manifest = manifestRef();
     if (!manifest?.planet?.surface_map) {
       throw new Error('surface_map unavailable');
     }
+
+    if (mode === 'planet_shader') {
+      if (!shaderMaterial) {
+        setStatus('正在初始化着色器材质…');
+        const surfaceMapTexture = createSurfaceDataTexture(manifest.planet.surface_map);
+        shaderMaterial = createPlanetShaderMaterial({
+          surfaceMapTexture,
+          landThreshold: manifest.planet.surface_map.land_threshold,
+          palette: materialRules.raw_palette,
+          materialRules,
+        });
+      }
+      planet.material = shaderMaterial;
+      return { _isShader: true };
+    }
+
+    if (mode === 'surface_map') {
+      return baseSurfaceTexture ? { albedo: baseSurfaceTexture } : null;
+    }
+
     if (mode === 'openai_materials') {
       if (!openaiMaterialTextures) {
         openaiMaterialTextures = await loadBakedTextureSet(mode);
@@ -100,9 +126,10 @@ export function createMaterialRuntime({
     try {
       const textureSet = await loadTextureMode(mode);
       if (currentTextureMode !== mode || !textureSet) return;
+      if (textureSet._isShader) return;
       applyTextureSet(textureSet);
     } catch (error) {
-      setStatus(`OpenAI 材质不可用，已降级原始贴图：${error.message}`);
+      setStatus(`材质不可用，已降级原始贴图：${error.message}`);
       currentTextureMode = 'surface_map';
       onFallbackMode('surface_map');
       if (baseSurfaceTexture) {

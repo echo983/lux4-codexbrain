@@ -1,9 +1,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { INITIAL_CAMERA, PLANET_COLORS } from './config.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { INITIAL_CAMERA, PLANET_COLORS, BLOOM_PARAMS } from './config.js';
 
 export function createSceneRuntime(sceneRoot) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   sceneRoot.appendChild(renderer.domElement);
 
@@ -30,37 +35,78 @@ export function createSceneRuntime(sceneRoot) {
   controls.zoomSpeed = 0.9;
 
   scene.add(new THREE.AmbientLight(PLANET_COLORS.ambientLight, 1.5));
-  const dirLight = new THREE.DirectionalLight(PLANET_COLORS.directionalLight, 1.1);
+  const dirLight = new THREE.DirectionalLight(PLANET_COLORS.directionalLight, 1.15);
   dirLight.position.set(18, 12, 14);
   scene.add(dirLight);
 
-  const planetGeometry = new THREE.SphereGeometry(1, 96, 96);
+  const planetGeometry = new THREE.SphereGeometry(1, 128, 128);
   const planetBasePositions = Float32Array.from(planetGeometry.attributes.position.array);
 
   const planet = new THREE.Mesh(
     planetGeometry,
     new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      emissive: 0x0d2230,
+      emissive: 0x05080b,
       roughness: 0.95,
       metalness: 0.05,
     }),
   );
   scene.add(planet);
 
+  // Shader-based Atmosphere Shell
   const atmosphere = new THREE.Mesh(
     new THREE.SphereGeometry(1, 64, 64),
-    new THREE.MeshBasicMaterial({
-      color: PLANET_COLORS.atmosphere,
+    new THREE.ShaderMaterial({
       transparent: true,
-      opacity: 0.08,
       side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        glowColor: { value: new THREE.Color(PLANET_COLORS.atmosphere) },
+        p: { value: 3.2 },
+        c: { value: 0.18 },
+      },
+      vertexShader: `
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          vPosition = (modelViewMatrix * vec4(position, 1.0)).xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 glowColor;
+        uniform float c;
+        uniform float p;
+        varying vec3 vNormal;
+        varying vec3 vPosition;
+        void main() {
+          float intensity = pow(c - dot(vNormal, vec3(0.0, 0.0, 1.0)), p);
+          gl_FragColor = vec4(glowColor, intensity);
+        }
+      `,
     }),
   );
   scene.add(atmosphere);
 
+  // Post-processing
+  const renderPass = new RenderPass(scene, camera);
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    BLOOM_PARAMS.strength,
+    BLOOM_PARAMS.radius,
+    BLOOM_PARAMS.threshold,
+  );
+  const outputPass = new OutputPass();
+
+  const composer = new EffectComposer(renderer);
+  composer.addPass(renderPass);
+  composer.addPass(bloomPass);
+  composer.addPass(outputPass);
+
   return {
     renderer,
+    composer,
     scene,
     camera,
     controls,

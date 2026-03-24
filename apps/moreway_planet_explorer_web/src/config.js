@@ -10,8 +10,14 @@ export const INITIAL_CAMERA = {
 };
 
 export const PLANET_COLORS = {
-  background: 0x050b10,
+  background: 0x050a0f,
   atmosphere: 0x4fbfff,
   ambientLight: 0x9abde0,
   directionalLight: 0xcde7ff,
+};
+
+export const BLOOM_PARAMS = {
+  strength: 1.05,
+  radius: 0.38,
+  threshold: 0.1,
 };

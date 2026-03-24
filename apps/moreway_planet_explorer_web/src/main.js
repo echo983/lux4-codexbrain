@@ -15,6 +15,10 @@ import {
 import { createFocusSystem } from './focus_system.js';
 import { createMaterialRuntime } from './material_runtime.js';
 import { buildPlanetMaterialTexture } from './material_texture_builder.js';
+import {
+  createPlanetShaderMaterial,
+  createSurfaceDataTexture,
+} from './planet_shader.js';
 import { createResultsPanel } from './results_panel.js';
 import {
   createSceneRuntime,
@@ -41,6 +45,7 @@ let planetRadius = 10.0;
 let pointRadius = 10.08;
 const {
   renderer,
+  composer,
   scene,
   camera,
   controls,
@@ -117,6 +122,8 @@ const materialRuntime = createMaterialRuntime({
   planet,
   textureLoader,
   buildPlanetMaterialTexture,
+  createPlanetShaderMaterial,
+  createSurfaceDataTexture,
   setStatus,
   onFallbackMode: (mode) => {
     currentTextureMode = mode;
@@ -125,7 +132,7 @@ const materialRuntime = createMaterialRuntime({
     }
   },
 });
-let currentTextureMode = DEFAULT_TEXTURE_MODE;
+let currentTextureMode = 'planet_shader';
 const focusSystem = createFocusSystem({
   scene,
   camera,
@@ -218,6 +225,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 let lastChunkRefresh = 0;
@@ -247,7 +255,7 @@ function animate(now = 0) {
   }
   focusSystem.updateFocusLabels();
   focusSystem.updateTopFocusHighlight();
-  renderer.render(scene, camera);
+  composer.render();
 }
 
 bootstrap();

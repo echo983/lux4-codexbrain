@@ -18,6 +18,11 @@ export const TEXTURE_MODE_SPECS = {
     usesBakedTextures: true,
     assetBase: OPENAI_MATERIAL_ASSET_BASE,
   },
+  planet_shader: {
+    mode: 'planet_shader',
+    usesBakedTextures: false,
+    assetBase: null,
+  },
 };
 
 export function bakedTextureKey(mode, channel) {

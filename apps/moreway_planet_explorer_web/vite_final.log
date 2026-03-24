@@ -1,0 +1,66 @@
+
+  VITE v7.3.1  ready in 356 ms
+
+  ➜  Local:   http://localhost:18571/
+  ➜  Network: http://192.168.1.66:18571/
+  ➜  Network: http://192.168.1.67:18571/
+  ➜  Network: http://172.19.0.1:18571/
+  ➜  Network: http://172.20.0.1:18571/
+15:21:55 [vite] (client) page reload src/planet_shader.js
+15:23:41 [vite] (client) page reload src/planet_shader.js
+15:24:05 [vite] (client) page reload src/scene_runtime.js
+15:24:30 [vite] (client) page reload src/planet_shader.js
+15:24:41 [vite] (client) page reload src/main.js
+15:24:45 [vite] (client) page reload src/config.js
+15:24:56 [vite] (client) page reload src/scene_runtime.js
+15:26:20 [vite] (client) page reload src/planet_shader.js
+15:29:36 [vite] (client) page reload src/scene_runtime.js
+15:29:56 [vite] (client) page reload src/planet_shader.js
+15:30:25 [vite] (client) page reload src/config.js
+15:46:46 [vite] (client) page reload src/material_runtime.js
+15:47:15 [vite] (client) page reload src/planet_surface.js
+15:47:15 [vite] (client) page reload src/planet_surface.js
+15:47:32 [vite] (client) page reload src/material_texture_builder.js
+15:47:32 [vite] (client) page reload src/material_texture_builder.js
+15:48:05 [vite] (client) page reload src/main.js
+15:48:05 [vite] (client) page reload src/main.js
+15:51:01 [vite] (client) page reload src/material_ecology.js
+15:51:01 [vite] (client) page reload src/material_ecology.js
+15:51:33 [vite] (client) page reload src/planet_shader.js
+15:51:54 [vite] (client) page reload src/scene_runtime.js
+15:52:22 [vite] (client) page reload src/main.js
+15:53:13 [vite] vite.config.js changed, restarting server...
+15:53:13 [vite] (client) Re-optimizing dependencies because vite config has changed
+15:53:13 [vite] server restarted.
+(!) Failed to run dependency scan. Skipping dependency pre-bundling. Error:   Failed to scan for dependencies from entries:
+  /root/lux4-codexbrain/apps/moreway_planet_explorer_web/index.html
+
+  [31m✘ [41;31m[[41;97mERROR[41;31m][0m [1mUnexpected "..."[0m
+
+    src/config.js:4:0:
+[37m      4 │ [32m...[37m
+        ╵ [32m~~~[0m
+
+
+    at failureErrorWithLog (/root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:1748:15)
+    at /root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:1207:25
+    at runOnEndCallbacks (/root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:1588:45)
+    at buildResponseToResult (/root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:1205:7)
+    at /root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:1217:9
+    at new Promise (<anonymous>)
+    at requestCallbacks.on-end (/root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:1216:54)
+    at handleRequest (/root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:909:17)
+    at handleIncomingPacket (/root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:934:7)
+    at Socket.readFromStdout (/root/lux4-codexbrain/apps/moreway_planet_explorer_web/node_modules/esbuild/lib/main.js:862:7)
+15:53:14 [vite] (client) ✨ new dependencies optimized: three, apache-arrow, three/examples/jsm/controls/OrbitControls.js, three/examples/jsm/postprocessing/EffectComposer.js, three/examples/jsm/postprocessing/RenderPass.js, three/examples/jsm/postprocessing/UnrealBloomPass.js, three/examples/jsm/postprocessing/OutputPass.js
+17:03:30 [vite] (client) page reload src/planet_shader.js
+18:05:54 [vite] (client) page reload src/config.js
+18:59:27 [vite] (client) page reload src/main.js
+19:18:39 [vite] (client) page reload src/main.js
+19:56:53 [vite] (client) page reload src/planet_shader.js
+20:11:07 [vite] (client) page reload src/scene_runtime.js
+20:11:18 [vite] (client) page reload src/main.js
+20:12:02 [vite] (client) page reload src/config.js
+20:21:04 [vite] (client) page reload src/planet_shader.js
+20:40:34 [vite] (client) page reload src/material_runtime.js
+20:41:54 [vite] (client) page reload src/material_runtime.js

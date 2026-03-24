@@ -54,4 +54,12 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 18571,
   },
+  optimizeDeps: {
+    esbuildOptions: {
+      target: 'es2015',
+    },
+  },
+  build: {
+    target: 'es2015',
+  },
 });

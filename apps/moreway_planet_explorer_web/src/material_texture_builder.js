@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import materialRules from './material_rules.json' with { type: 'json' };
 import { sampleSurfaceValueBilinear } from './planet_surface.js';
 import {
   computeDistortion,
@@ -163,7 +162,7 @@ function tuneMaterialColor(rgb, { saturation = 1.1, gain = 1.06, lift = 4 } = {}
   return tuned.map((channel) => Math.max(0, Math.min(255, Math.round(channel))));
 }
 
-export async function buildPlanetMaterialTexture(surfaceMap, materialBasePath) {
+export async function buildPlanetMaterialTexture(surfaceMap, materialBasePath, materialRules) {
   const materialKeys = [
     'deep_ocean',
     'mid_ocean',

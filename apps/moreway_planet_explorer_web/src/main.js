@@ -68,8 +68,9 @@ function deriveDisplayRadii(bounds, surfaceMap = null) {
     [maxX, maxY, maxZ],
   ];
   let maxRadius = 0;
-  for (const [x, y, z] of corners) {
-    const radius = Math.sqrt(x * x + y * y + z * z);
+  for (let i = 0; i < corners.length; i += 1) {
+    const corner = corners[i];
+    const radius = Math.sqrt(corner[0] * corner[0] + corner[1] * corner[1] + corner[2] * corner[2]);
     if (radius > maxRadius) maxRadius = radius;
   }
   planetRadius = Math.max(0.1, maxRadius - 0.08);
@@ -100,6 +101,7 @@ function buildStarTexture() {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let manifest = null;
+let materialRules = null;
 let loadedChunks = new Map();
 let pointMeshes = [];
 let selectedPayload = null;
@@ -121,9 +123,10 @@ const materialRuntime = createMaterialRuntime({
   manifestRef: () => manifest,
   planet,
   textureLoader,
-  buildPlanetMaterialTexture,
+  buildPlanetMaterialTexture: (map, path) => buildPlanetMaterialTexture(map, path, materialRules),
   createPlanetShaderMaterial,
   createSurfaceDataTexture,
+  get materialRules() { return materialRules; },
   setStatus,
   onFallbackMode: (mode) => {
     currentTextureMode = mode;
@@ -170,12 +173,21 @@ function syncFocusRegionVisibility() {
 
 async function bootstrap() {
   try {
+    console.log('[BOOTSTRAP] Fetching latest.json...');
     const latest = await loadJson(`${DATASET_BASE}/latest.json`);
+    console.log('[BOOTSTRAP] latest.json loaded:', latest.manifest_path);
+    
     manifest = await loadJson(`${DATASET_BASE}/${latest.manifest_path}`);
+    console.log('[BOOTSTRAP] manifest loaded.');
+
+    console.log('[BOOTSTRAP] Fetching material_rules.json...');
+    materialRules = await loadJson('/src/material_rules.json');
+    console.log('[BOOTSTRAP] material_rules.json loaded.');
+
     deriveDisplayRadii(manifest.bounds, manifest.planet?.surface_map || null);
     if (manifest.planet?.surface_map) {
       applyPlanetSurfaceRelief(planet, planetBasePositions, manifest.planet.surface_map);
-      const baseSurfaceTexture = buildPlanetTexture(manifest.planet.surface_map);
+      const baseSurfaceTexture = buildPlanetTexture(manifest.planet.surface_map, materialRules);
       materialRuntime.setBaseSurfaceTexture(baseSurfaceTexture);
       planet.material.map = baseSurfaceTexture;
       planet.material.needsUpdate = true;
@@ -195,8 +207,10 @@ async function bootstrap() {
     setSelection(null);
     focusSystem.updateFocusResults();
     await materialRuntime.applyPlanetTextureMode(currentTextureMode);
+    console.log('[BOOTSTRAP] bootstrap complete.');
   } catch (error) {
-    setStatus(`加载失败：${error.message}`);
+    console.error('[BOOTSTRAP ERROR]', error);
+    setStatus(`加载失败：${error.message}\n${error.stack}`);
   }
 }
 
@@ -234,6 +248,16 @@ function animate(now = 0) {
   requestAnimationFrame(animate);
   updateControlResponsiveness(controls, pointMeshes, BASE_POINT_SIZE);
   controls.update();
+
+  if (planet.material && planet.material.uniforms) {
+    if (planet.material.uniforms.cameraPos) {
+      planet.material.uniforms.cameraPos.value.copy(camera.position);
+    }
+    if (planet.material.uniforms.time) {
+      planet.material.uniforms.time.value = now * 0.001;
+    }
+  }
+
   if (manifest && now - lastChunkRefresh > 1200) {
     lastChunkRefresh = now;
     ensureVisibleChunks({

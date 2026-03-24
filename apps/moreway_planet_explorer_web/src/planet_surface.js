@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import materialRules from './material_rules.json' with { type: 'json' };
 import {
   computeDistortion,
   computeLandBandWeights,
@@ -83,7 +82,7 @@ export function applyPlanetSurfaceRelief(planet, planetBasePositions, surfaceMap
   geometry.computeVertexNormals();
 }
 
-export function buildPlanetTexture(surfaceMap) {
+export function buildPlanetTexture(surfaceMap, materialRules) {
   const width = surfaceMap.lon_steps;
   const height = surfaceMap.lat_steps;
   const canvas = document.createElement('canvas');

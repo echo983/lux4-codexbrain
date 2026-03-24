@@ -13,7 +13,7 @@ export function createSceneRuntime(sceneRoot) {
   sceneRoot.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(PLANET_COLORS.background);
+  scene.background = new THREE.Color(0x000103); // Near black space
 
   const camera = new THREE.PerspectiveCamera(
     INITIAL_CAMERA.fov,
@@ -21,11 +21,15 @@ export function createSceneRuntime(sceneRoot) {
     INITIAL_CAMERA.near,
     INITIAL_CAMERA.far,
   );
-  camera.position.set(...INITIAL_CAMERA.position);
+  camera.position.set(
+    INITIAL_CAMERA.position[0],
+    INITIAL_CAMERA.position[1],
+    INITIAL_CAMERA.position[2]
+  );
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enablePan = false;
-  controls.minDistance = 13;
+  controls.minDistance = 11;
   controls.maxDistance = 60;
   controls.autoRotate = false;
   controls.autoRotateSpeed = 0.0;
@@ -34,8 +38,8 @@ export function createSceneRuntime(sceneRoot) {
   controls.rotateSpeed = 0.7;
   controls.zoomSpeed = 0.9;
 
-  scene.add(new THREE.AmbientLight(PLANET_COLORS.ambientLight, 1.5));
-  const dirLight = new THREE.DirectionalLight(PLANET_COLORS.directionalLight, 1.15);
+  scene.add(new THREE.AmbientLight(0x112233, 0.1)); // Very weak ambient
+  const dirLight = new THREE.DirectionalLight(0xffffff, 2.5); // Very strong sun
   dirLight.position.set(18, 12, 14);
   scene.add(dirLight);
 
@@ -46,14 +50,13 @@ export function createSceneRuntime(sceneRoot) {
     planetGeometry,
     new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      emissive: 0x05080b,
-      roughness: 0.95,
-      metalness: 0.05,
+      roughness: 0.9,
+      metalness: 0.1,
     }),
   );
   scene.add(planet);
 
-  // Shader-based Atmosphere Shell
+  // Advanced Atmosphere Shell (Rayleigh Scattering look)
   const atmosphere = new THREE.Mesh(
     new THREE.SphereGeometry(1, 64, 64),
     new THREE.ShaderMaterial({
@@ -61,16 +64,14 @@ export function createSceneRuntime(sceneRoot) {
       side: THREE.BackSide,
       blending: THREE.AdditiveBlending,
       uniforms: {
-        glowColor: { value: new THREE.Color(PLANET_COLORS.atmosphere) },
-        p: { value: 3.2 },
-        c: { value: 0.18 },
+        glowColor: { value: new THREE.Color(0.2, 0.5, 1.0) }, // Earth blue
+        p: { value: 4.5 }, // Sharpness
+        c: { value: 0.25 }, // Thickness
       },
       vertexShader: `
         varying vec3 vNormal;
-        varying vec3 vPosition;
         void main() {
           vNormal = normalize(normalMatrix * normal);
-          vPosition = (modelViewMatrix * vec4(position, 1.0)).xyz;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
@@ -79,9 +80,8 @@ export function createSceneRuntime(sceneRoot) {
         uniform float c;
         uniform float p;
         varying vec3 vNormal;
-        varying vec3 vPosition;
         void main() {
-          float intensity = pow(c - dot(vNormal, vec3(0.0, 0.0, 1.0)), p);
+          float intensity = pow(max(0.0, c - dot(vNormal, vec3(0.0, 0.0, 1.0))), p);
           gl_FragColor = vec4(glowColor, intensity);
         }
       `,

@@ -1,20 +1,4 @@
-import materialRules from './material_rules.json' with { type: 'json' };
-
-export function clamp(value, low, high) {
-  return Math.max(low, Math.min(high, value));
-}
-
-export function smoothstep(edge0, edge1, x) {
-  const t = clamp((x - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
-export function computeDistortion(su, sv) {
-  return Math.sin((su * 7.0 + sv * 3.0) * Math.PI * 2) * 0.5
-    + Math.cos((su * 4.0 - sv * 5.0) * Math.PI * 2) * 0.5;
-}
-
-export function computeLandEcology({ su, sv, compressed, distortion }, rules = materialRules) {
+export function computeLandEcology({ su, sv, compressed, distortion }, rules) {
   const ecology = rules.land.ecology;
   const latitude = Math.abs(sv * 2 - 1);
   const distortionN = (distortion + 1) * 0.5;
@@ -52,7 +36,21 @@ export function computeLandEcology({ su, sv, compressed, distortion }, rules = m
   };
 }
 
-export function computeLandBandWeights(compressed, rules = materialRules) {
+export function clamp(value, low, high) {
+  return Math.max(low, Math.min(high, value));
+}
+
+export function smoothstep(edge0, edge1, x) {
+  const t = clamp((x - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+export function computeDistortion(su, sv) {
+  return Math.sin((su * 7.0 + sv * 3.0) * Math.PI * 2) * 0.5
+    + Math.cos((su * 4.0 - sv * 5.0) * Math.PI * 2) * 0.5;
+}
+
+export function computeLandBandWeights(compressed, rules) {
   const landRules = rules.land;
   if (compressed < landRules.coast_end) {
     return { coast: 1, lowland: 0, upland: 0, mountain: 0 };

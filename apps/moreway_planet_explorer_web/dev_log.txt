@@ -1,0 +1,12 @@
+
+> moreway-planet-explorer-web@0.1.0 dev
+> vite --port 18571 --host 0.0.0.0
+
+
+  VITE v7.3.1  ready in 404 ms
+
+  ➜  Local:   http://localhost:18571/
+  ➜  Network: http://192.168.1.66:18571/
+  ➜  Network: http://192.168.1.67:18571/
+  ➜  Network: http://172.19.0.1:18571/
+  ➜  Network: http://172.20.0.1:18571/

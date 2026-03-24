@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import materialRules from './material_rules.json' with { type: 'json' };
 import {
   BAKE_CHANNELS,
   DEFAULT_TEXTURE_MODE,
@@ -15,6 +14,7 @@ export function createMaterialRuntime({
   buildPlanetMaterialTexture,
   createPlanetShaderMaterial,
   createSurfaceDataTexture,
+  materialRules,
   setStatus,
   onFallbackMode,
 }) {
@@ -87,12 +87,29 @@ export function createMaterialRuntime({
 
     if (mode === 'planet_shader') {
       if (!shaderMaterial) {
-        setStatus('正在初始化着色器材质…');
+        setStatus('正在初始化写实着色器材质…');
+        
+        // 直接加载预烘焙贴图集，避免递归调用 loadTextureMode
+        if (!openaiMaterialTextures) {
+          openaiMaterialTextures = await loadBakedTextureSet('openai_materials');
+          if (!openaiMaterialTextures) {
+            // 如果预烘焙贴图不可用，尝试构建
+            setStatus('正在构建 OpenAI 地表材质…');
+            const spec = getTextureModeSpec('openai_materials');
+            const map = await buildPlanetMaterialTexture(
+              manifest.planet.surface_map,
+              spec.assetBase,
+            );
+            openaiMaterialTextures = { albedo: map };
+          }
+        }
+        
+        const albedoTexture = openaiMaterialTextures.albedo;
         const surfaceMapTexture = createSurfaceDataTexture(manifest.planet.surface_map);
         shaderMaterial = createPlanetShaderMaterial({
           surfaceMapTexture,
+          albedoTexture,
           landThreshold: manifest.planet.surface_map.land_threshold,
-          palette: materialRules.raw_palette,
           materialRules,
         });
       }

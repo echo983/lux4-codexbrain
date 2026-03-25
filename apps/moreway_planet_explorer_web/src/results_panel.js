@@ -123,10 +123,9 @@ export function createResultsPanel({
     const selectedPayload = getSelectedPayload();
     resultsListEl.innerHTML = focusResults.map((entry, idx) => {
       const payload = entry.payload;
-      const title = payload.title || payload.path_in_snapshot || payload.doc_id || 'Untitled';
       const isAssetCard = inferDocKind(payload) === 'asset_card';
-      const badgeLabel = isAssetCard ? '资产卡' : '原始文档';
-      const badgeClass = isAssetCard ? 'asset' : 'raw';
+      const emoji = isAssetCard ? '💎' : '📄';
+      const title = `${emoji} ${payload.title || payload.path_in_snapshot || payload.doc_id || 'Untitled'}`;
       const compactMeta = compactMetaLabel(payload);
       const mdUrl = nbssObjectUrl(payload.keep_md_fid);
       const cardUrl = assetCardUrl(payload);
@@ -156,12 +155,9 @@ export function createResultsPanel({
             <span>#${idx + 1} · 中心距离 ${entry.distance.toFixed(3)}</span>
             <span class="result-rank-meta">${escapeHtml(compactMeta)}</span>
           </div>
-          <div class="result-header">
-            <span class="result-badge ${badgeClass}">${badgeLabel}</span>
-            <div class="result-title-wrap">
-              <h2 class="result-title">${mdUrl ? `<a href="${escapeHtml(mdUrl)}" target="_blank" rel="noreferrer">${escapeHtml(title)}</a>` : escapeHtml(title)}</h2>
-              ${links}
-            </div>
+          <div class="result-title-wrap">
+            <h2 class="result-title">${mdUrl ? `<a href="${escapeHtml(mdUrl)}" target="_blank" rel="noreferrer">${escapeHtml(title)}</a>` : escapeHtml(title)}</h2>
+            ${links}
           </div>
           ${assetLines}
           ${!isAssetCard ? `<p class="result-preview">${escapeHtml(preview)}</p>` : ''}

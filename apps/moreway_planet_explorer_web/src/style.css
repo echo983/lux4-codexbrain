@@ -95,10 +95,18 @@ html, body, #app {
 }
 
 .result-card.is-asset-card { border-left: 3px solid rgba(255, 216, 118, 0.9); }
+.result-card.is-selected { border-color: rgba(121, 208, 255, 0.48); background: rgba(11, 25, 36, 0.82); }
+
+.result-asset-lines { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.result-asset-line { display: flex; flex-direction: column; gap: 2px; }
+.result-asset-key { color: var(--accent); font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8; }
+.result-asset-value { color: var(--text); line-height: 1.5; }
+.result-asset-value b { color: #fff; font-weight: 600; }
+
 .result-title { margin: 0 0 8px; font-weight: normal; font-size: 14px; line-height: 1.4; }
 .result-title a { color: var(--text); text-decoration: none; }
 
-.result-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.result-links { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .result-link {
   display: inline-block;
   padding: 3px 10px;

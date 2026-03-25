@@ -34,6 +34,12 @@ export function createResultsPanel({
       .join('\n');
   }
 
+  function formatContent(text) {
+    const escaped = escapeHtml(text);
+    // Simple regex to convert **text** to <b>text</b>
+    return escaped.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+  }
+
   function parseAssetCardSummary(markdown, fallbackPreview = '') {
     const body = stripFrontmatter(markdown);
     const coreView = body.match(/\*\*核心观点\*\*[：:]\s*(.+)/)?.[1]?.trim() || '';
@@ -133,9 +139,9 @@ export function createResultsPanel({
       ) ? ' is-selected' : '';
       const assetLines = isAssetCard ? `
         <div class="result-asset-lines">
-          ${cached?.coreView ? `<div class="result-asset-line"><div class="result-asset-key">核心观点</div><div class="result-asset-value">${escapeHtml(cached.coreView)}</div></div>` : ''}
-          ${cached?.intent ? `<div class="result-asset-line"><div class="result-asset-key">意图识别</div><div class="result-asset-value">${escapeHtml(cached.intent)}</div></div>` : ''}
-          ${cached?.cognitiveAsset ? `<div class="result-asset-line"><div class="result-asset-key">认知资产</div><div class="result-asset-value">${escapeHtml(cached.cognitiveAsset)}</div></div>` : ''}
+          ${cached?.coreView ? `<div class="result-asset-line"><div class="result-asset-key">核心观点</div><div class="result-asset-value">${formatContent(cached.coreView)}</div></div>` : ''}
+          ${cached?.intent ? `<div class="result-asset-line"><div class="result-asset-key">意图识别</div><div class="result-asset-value">${formatContent(cached.intent)}</div></div>` : ''}
+          ${cached?.cognitiveAsset ? `<div class="result-asset-line"><div class="result-asset-key">认知资产</div><div class="result-asset-value">${formatContent(cached.cognitiveAsset)}</div></div>` : ''}
         </div>
       ` : '';
       const links = `

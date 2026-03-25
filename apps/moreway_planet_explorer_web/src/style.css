@@ -28,8 +28,7 @@ html, body, #app {
   inset: 0;
   z-index: 5;
   pointer-events: none;
-  backdrop-filter: blur(6px) brightness(0.8);
-  /* Cutout for the center region using a radial mask */
+  backdrop-filter: blur(3px) brightness(0.98);
   mask-image: radial-gradient(circle, transparent min(28vw, 280px), black min(35vw, 380px));
   -webkit-mask-image: radial-gradient(circle, transparent min(28vw, 280px), black min(35vw, 380px));
 }
@@ -91,14 +90,19 @@ html, body, #app {
 .results-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 
 .result-card {
-  padding: 10px;
+  padding: 12px;
   border: 1px solid rgba(121, 208, 255, 0.1);
   border-radius: 10px;
   background: rgba(6, 14, 21, 0.4);
   font-size: 13px;
 }
 
-.result-title { margin: 0; font-weight: normal; }
+.result-card.is-asset-card { border-left: 3px solid rgba(255, 216, 118, 0.9); }
+.result-card.is-selected { border-color: rgba(121, 208, 255, 0.48); background: rgba(11, 25, 36, 0.82); }
+
+.result-title { margin: 0; font-weight: normal; font-size: 15px; }
+.result-title a { color: var(--text); text-decoration: none; }
+.result-title a:hover { color: var(--accent); }
 
 .focus-point-label {
   position: absolute;
@@ -112,3 +116,5 @@ html, body, #app {
   backdrop-filter: blur(4px);
   pointer-events: none;
 }
+
+.is-hidden { display: none !important; }

@@ -280,7 +280,8 @@ export function createFocusSystem({
 
   function updateTopFocusHighlight() {
     const top = focusResults[0];
-    if (!top || !isWorldPointVisible(top.position)) {
+    // Relaxed visibility check for the highlight to prevent disappearance on zoom
+    if (!top || !isWorldPointFrontFacing(top.position)) {
       topFocusHighlight.visible = false;
       topFocusGlow.visible = false;
       topFocusRing.visible = false;
@@ -290,11 +291,12 @@ export function createFocusSystem({
     // Update basic point highlight
     const geometry = topFocusHighlight.geometry;
     geometry.setAttribute('position', new THREE.Float32BufferAttribute([top.position.x, top.position.y, top.position.z], 3));
+    geometry.computeBoundingSphere(); // Important for frustum culling
     topFocusHighlight.visible = true;
 
-    // Update outer glow
     const glowGeometry = topFocusGlow.geometry;
     glowGeometry.setAttribute('position', new THREE.Float32BufferAttribute([top.position.x, top.position.y, top.position.z], 3));
+    glowGeometry.computeBoundingSphere();
     topFocusGlow.visible = true;
 
     // Update Scanner Ring
@@ -305,17 +307,17 @@ export function createFocusSystem({
     const baseSize = currentPointSize();
     const t = performance.now() * 0.001;
     
-    // Breathing animation: from 1.0X to 2.0X of regular point size
+    // Breathing animation: from 1.0X to 1.5X
     const breatheCycle = (1.0 + Math.sin(t * 2.5)) / 2.0; 
     const easedBreathe = Math.pow(breatheCycle, 1.5);
 
-    // Update main highlight point (Range: 1.0 to 2.0)
-    topFocusHighlight.material.size = baseSize * (1.0 + 1.0 * easedBreathe);
-    topFocusHighlight.material.opacity = 0.7 + 0.3 * easedBreathe;
+    // Update main highlight point (Range: 1.0 to 1.5)
+    topFocusHighlight.material.size = baseSize * (1.0 + 0.5 * easedBreathe);
+    topFocusHighlight.material.opacity = 0.75 + 0.25 * easedBreathe;
     
     // Update outer glow (Scaled proportionally)
-    topFocusGlow.material.size = topFocusHighlight.material.size * 2.2;
-    topFocusGlow.material.opacity = 0.15 + 0.35 * easedBreathe;
+    topFocusGlow.material.size = topFocusHighlight.material.size * 2.0;
+    topFocusGlow.material.opacity = 0.2 + 0.3 * easedBreathe;
     topFocusGlow.material.color.lerpColors(
       new THREE.Color(0xffffff), 
       new THREE.Color(0x85e3ff), 

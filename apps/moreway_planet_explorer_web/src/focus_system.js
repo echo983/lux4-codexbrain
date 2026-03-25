@@ -303,19 +303,19 @@ export function createFocusSystem({
     topFocusRing.visible = true;
 
     const baseSize = currentPointSize();
-    const t = performance.now() * 0.001; // Time in seconds
+    const t = performance.now() * 0.001;
     
-    // Breathing animation (slower, smoother sine wave)
-    const breatheCycle = (1.0 + Math.sin(t * 2.0)) / 2.0; // Varies from 0 to 1
-    const easedBreathe = Math.pow(breatheCycle, 2.0);
+    // Breathing animation: from 1.0X to 2.0X of regular point size
+    const breatheCycle = (1.0 + Math.sin(t * 2.5)) / 2.0; 
+    const easedBreathe = Math.pow(breatheCycle, 1.5);
 
-    // Update main highlight point
-    topFocusHighlight.material.size = baseSize * (1.5 + 1.0 * easedBreathe);
-    topFocusHighlight.material.opacity = 0.8 + 0.2 * easedBreathe;
+    // Update main highlight point (Range: 1.0 to 2.0)
+    topFocusHighlight.material.size = baseSize * (1.0 + 1.0 * easedBreathe);
+    topFocusHighlight.material.opacity = 0.7 + 0.3 * easedBreathe;
     
-    // Update outer glow
-    topFocusGlow.material.size = topFocusHighlight.material.size * 2.5;
-    topFocusGlow.material.opacity = 0.2 + 0.3 * easedBreathe;
+    // Update outer glow (Scaled proportionally)
+    topFocusGlow.material.size = topFocusHighlight.material.size * 2.2;
+    topFocusGlow.material.opacity = 0.15 + 0.35 * easedBreathe;
     topFocusGlow.material.color.lerpColors(
       new THREE.Color(0xffffff), 
       new THREE.Color(0x85e3ff), 

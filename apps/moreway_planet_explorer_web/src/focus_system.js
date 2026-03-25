@@ -20,26 +20,16 @@ export function createFocusSystem({
   let focusResultHistory = new Map();
   let focusResultsSignature = '';
 
-  function buildCrossTexture() {
+  function buildRingTexture() {
     const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
+    canvas.width = 128;
+    canvas.height = 128;
     const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, 64, 64);
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(32, 14);
-    ctx.lineTo(32, 50);
-    ctx.moveTo(14, 32);
-    ctx.lineTo(50, 32);
+    ctx.arc(64, 64, 60, 0, Math.PI * 2);
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
     ctx.stroke();
-    const glow = ctx.createRadialGradient(32, 32, 0, 32, 32, 24);
-    glow.addColorStop(0, 'rgba(255,255,255,0.28)');
-    glow.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, 64, 64);
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     return texture;
@@ -90,28 +80,27 @@ export function createFocusSystem({
       alphaMap: starTexture,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
-      color: 0xffe6a3,
+      color: 0xffffff,
     }),
   );
   topFocusGlow.visible = false;
   scene.add(topFocusGlow);
 
-  const crossTexture = buildCrossTexture();
-  const topFocusCross = new THREE.Points(
-    new THREE.BufferGeometry(),
-    new THREE.PointsMaterial({
-      size: 0.26,
+  const ringTexture = buildRingTexture();
+  const topFocusRing = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({
+      map: ringTexture,
       transparent: true,
-      opacity: 0.3,
-      map: crossTexture,
-      alphaMap: crossTexture,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
-      color: 0xb9bbff,
-    }),
+      color: 0x00ccff,
+    })
   );
-  topFocusCross.visible = false;
-  scene.add(topFocusCross);
+  topFocusRing.visible = false;
+  scene.add(topFocusRing);
 
   function isWorldPointFrontFacing(worldPoint) {
     const cameraHemisphere = camera.position.clone().normalize();
@@ -294,60 +283,49 @@ export function createFocusSystem({
     if (!top || !isWorldPointVisible(top.position)) {
       topFocusHighlight.visible = false;
       topFocusGlow.visible = false;
-      topFocusCross.visible = false;
+      topFocusRing.visible = false;
       return;
     }
+    
+    // Update basic point highlight
     const geometry = topFocusHighlight.geometry;
-    geometry.setAttribute(
-      'position',
-      new THREE.Float32BufferAttribute(
-        [top.position.x, top.position.y, top.position.z],
-        3,
-      ),
-    );
-    geometry.computeBoundingSphere();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([top.position.x, top.position.y, top.position.z], 3));
     topFocusHighlight.visible = true;
 
+    // Update outer glow
     const glowGeometry = topFocusGlow.geometry;
-    glowGeometry.setAttribute(
-      'position',
-      new THREE.Float32BufferAttribute(
-        [top.position.x, top.position.y, top.position.z],
-        3,
-      ),
-    );
-    glowGeometry.computeBoundingSphere();
+    glowGeometry.setAttribute('position', new THREE.Float32BufferAttribute([top.position.x, top.position.y, top.position.z], 3));
     topFocusGlow.visible = true;
-    const crossGeometry = topFocusCross.geometry;
-    crossGeometry.setAttribute(
-      'position',
-      new THREE.Float32BufferAttribute(
-        [top.position.x, top.position.y, top.position.z],
-        3,
-      ),
-    );
-    crossGeometry.computeBoundingSphere();
-    topFocusCross.visible = true;
+
+    // Update Scanner Ring
+    topFocusRing.position.copy(top.position);
+    topFocusRing.lookAt(0, 0, 0);
+    topFocusRing.visible = true;
+
     const baseSize = currentPointSize();
-    const highlightSize = baseSize * 1.5;
-    const breathe = 0.5 + 0.5 * Math.sin(performance.now() * 0.0032);
-    topFocusHighlight.material.size = highlightSize;
-    topFocusGlow.material.size = highlightSize * (1.18 + 0.62 * breathe);
-    topFocusGlow.material.opacity = 0.14 + 0.34 * breathe;
-    const glowColor = new THREE.Color().lerpColors(
-      new THREE.Color(0xfff0be),
-      new THREE.Color(0x7e7cff),
-      0.2 + 0.8 * breathe,
+    const t = performance.now() * 0.001; // Time in seconds
+    
+    // Breathing animation (slower, smoother sine wave)
+    const breatheCycle = (1.0 + Math.sin(t * 2.0)) / 2.0; // Varies from 0 to 1
+    const easedBreathe = Math.pow(breatheCycle, 2.0);
+
+    // Update main highlight point
+    topFocusHighlight.material.size = baseSize * (1.5 + 1.0 * easedBreathe);
+    topFocusHighlight.material.opacity = 0.8 + 0.2 * easedBreathe;
+    
+    // Update outer glow
+    topFocusGlow.material.size = topFocusHighlight.material.size * 2.5;
+    topFocusGlow.material.opacity = 0.2 + 0.3 * easedBreathe;
+    topFocusGlow.material.color.lerpColors(
+      new THREE.Color(0xffffff), 
+      new THREE.Color(0x85e3ff), 
+      easedBreathe
     );
-    topFocusGlow.material.color.copy(glowColor);
-    topFocusCross.material.size = highlightSize * (0.82 + 0.2 * breathe);
-    topFocusCross.material.opacity = 0.14 + 0.24 * breathe;
-    const crossColor = new THREE.Color().lerpColors(
-      new THREE.Color(0xd2d6ff),
-      new THREE.Color(0x858cff),
-      0.35 + 0.65 * breathe,
-    );
-    topFocusCross.material.color.copy(crossColor);
+
+    // Update Scanner Ring
+    const wave = (t * 0.8) % 1.0;
+    topFocusRing.scale.setScalar(baseSize * 10.0 * wave);
+    topFocusRing.material.opacity = 0.6 * (1.0 - wave);
   }
 
   return {

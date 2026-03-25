@@ -1,5 +1,5 @@
 export const DATASET_BASE = '/var/moreway_planet_dataset';
-export const BASE_POINT_SIZE = 0.16;
+export const BASE_POINT_SIZE = 0.13;
 export const DEFAULT_TEXTURE_MODE = 'planet_shader';
 
 export const INITIAL_CAMERA = {

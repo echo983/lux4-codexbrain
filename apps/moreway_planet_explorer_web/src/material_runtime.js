@@ -1,165 +1,63 @@
 import * as THREE from 'three';
-import {
-  BAKE_CHANNELS,
-  DEFAULT_TEXTURE_MODE,
-  getBakedTextureUrls,
-  getTextureModeSpec,
-} from './material_assets.js';
+import { getBakedTextureUrls } from './material_assets.js';
+import { createPlanetShaderMaterial, createSurfaceDataTexture } from './planet_shader.js';
 
 export function createMaterialRuntime({
   dataSetBase,
-  manifestRef,
   planet,
   textureLoader,
-  buildPlanetMaterialTexture,
-  createPlanetShaderMaterial,
-  createSurfaceDataTexture,
+  manifestRef,
   materialRules,
   setStatus,
-  onFallbackMode,
 }) {
-  const textureCache = new Map();
-  let baseSurfaceTexture = null;
-  let openaiMaterialTextures = null;
-  let currentTextureMode = DEFAULT_TEXTURE_MODE;
-  
-  const originalMaterial = planet.material;
   let shaderMaterial = null;
 
-  async function loadExternalTexture(url, { colorSpace = THREE.NoColorSpace } = {}) {
-    const cacheKey = `${url}::${colorSpace}`;
-    if (textureCache.has(cacheKey)) {
-      return textureCache.get(cacheKey);
-    }
-    const texture = await new Promise((resolve, reject) => {
-      textureLoader.load(
-        url,
-        (loaded) => resolve(loaded),
-        undefined,
-        (err) => reject(err || new Error(`failed to load texture: ${url}`)),
-      );
-    });
-    texture.colorSpace = colorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    textureCache.set(cacheKey, texture);
-    return texture;
-  }
-
-  function applyTextureSet(textureSet) {
-    if (planet.material !== originalMaterial) {
-      planet.material = originalMaterial;
-    }
-    BAKE_CHANNELS.forEach(({ materialProperty, channel }) => {
-      planet.material[materialProperty] = textureSet?.[channel] ?? null;
-    });
-    planet.material.needsUpdate = true;
-  }
-
-  async function loadBakedTextureSet(mode) {
+  async function loadBakedAlbedo() {
     const urls = getBakedTextureUrls({
       dataSetBase,
       manifest: manifestRef(),
-      mode,
+      mode: 'openai_materials',
     });
-    if (!urls || !Object.values(urls).every(Boolean)) {
-      return null;
+    if (!urls || !urls.albedo) {
+      throw new Error('Albedo texture URL not found');
     }
-    setStatus('正在加载 OpenAI 预烘焙地表材质…');
-    const entries = await Promise.all(
-      BAKE_CHANNELS.map(async ({ channel }) => [
-        channel,
-        await loadExternalTexture(
-          urls[channel],
-          channel === 'albedo' ? { colorSpace: THREE.SRGBColorSpace } : {},
-        ),
-      ]),
-    );
-    return Object.fromEntries(entries);
+    const texture = await textureLoader.loadAsync(urls.albedo);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    return texture;
   }
 
-  async function loadTextureMode(mode) {
-    const spec = getTextureModeSpec(mode);
+  async function initialize() {
     const manifest = manifestRef();
     if (!manifest?.planet?.surface_map) {
       throw new Error('surface_map unavailable');
     }
 
-    if (mode === 'planet_shader') {
-      if (!shaderMaterial) {
-        setStatus('正在初始化写实着色器材质…');
-        
-        // 直接加载预烘焙贴图集，避免递归调用 loadTextureMode
-        if (!openaiMaterialTextures) {
-          openaiMaterialTextures = await loadBakedTextureSet('openai_materials');
-          if (!openaiMaterialTextures) {
-            // 如果预烘焙贴图不可用，尝试构建
-            setStatus('正在构建 OpenAI 地表材质…');
-            const spec = getTextureModeSpec('openai_materials');
-            const map = await buildPlanetMaterialTexture(
-              manifest.planet.surface_map,
-              spec.assetBase,
-            );
-            openaiMaterialTextures = { albedo: map };
-          }
-        }
-        
-        const albedoTexture = openaiMaterialTextures.albedo;
-        const surfaceMapTexture = createSurfaceDataTexture(manifest.planet.surface_map);
-        shaderMaterial = createPlanetShaderMaterial({
-          surfaceMapTexture,
-          albedoTexture,
-          landThreshold: manifest.planet.surface_map.land_threshold,
-          materialRules,
-        });
-      }
-      planet.material = shaderMaterial;
-      return { _isShader: true };
-    }
-
-    if (mode === 'surface_map') {
-      return baseSurfaceTexture ? { albedo: baseSurfaceTexture } : null;
-    }
-
-    if (mode === 'openai_materials') {
-      if (!openaiMaterialTextures) {
-        openaiMaterialTextures = await loadBakedTextureSet(mode);
-        if (!openaiMaterialTextures) {
-          setStatus('正在构建 OpenAI 地表材质…');
-          const map = await buildPlanetMaterialTexture(
-            manifest.planet.surface_map,
-            spec.assetBase,
-          );
-          openaiMaterialTextures = { albedo: map };
-        }
-      }
-      return openaiMaterialTextures;
-    }
-    throw new Error(`unknown texture mode: ${mode}`);
-  }
-
-  async function applyPlanetTextureMode(mode) {
-    currentTextureMode = mode;
     try {
-      const textureSet = await loadTextureMode(mode);
-      if (currentTextureMode !== mode || !textureSet) return;
-      if (textureSet._isShader) return;
-      applyTextureSet(textureSet);
+      setStatus('正在加载写实地表材质…');
+      const albedoTexture = await loadBakedAlbedo();
+      const surfaceMapTexture = createSurfaceDataTexture(manifest.planet.surface_map);
+      
+      shaderMaterial = createPlanetShaderMaterial({
+        surfaceMapTexture,
+        albedoTexture,
+        landThreshold: manifest.planet.surface_map.land_threshold,
+        materialRules,
+      });
+
+      planet.material = shaderMaterial;
+      setStatus('就绪');
     } catch (error) {
-      setStatus(`材质不可用，已降级原始贴图：${error.message}`);
-      currentTextureMode = 'surface_map';
-      onFallbackMode('surface_map');
-      if (baseSurfaceTexture) {
-        applyTextureSet({ albedo: baseSurfaceTexture });
-      }
+      console.error('Material initialization failed:', error);
+      setStatus(`渲染初始化失败: ${error.message}`);
     }
   }
 
   return {
-    getCurrentTextureMode: () => currentTextureMode,
-    setBaseSurfaceTexture: (texture) => {
-      baseSurfaceTexture = texture;
-    },
-    applyPlanetTextureMode,
+    initialize,
+    // Keep these for backward compatibility during transition if needed
+    applyPlanetTextureMode: async () => {}, 
+    setBaseSurfaceTexture: () => {},
   };
 }

@@ -39,9 +39,9 @@ export function buildChunkPoints(rows, pointRadius, basePointSize, starTexture) 
     const displayed = direction.multiplyScalar(pointRadius);
     positions.push(displayed.x, displayed.y, displayed.z);
     if (row.doc_kind === 'asset_card') {
-      color.setRGB(0.54, 0.86, 1.0);
+      color.setRGB(0.45, 0.78, 1.0);
     } else {
-      color.setRGB(1.0, 0.77, 0.48);
+      color.setRGB(0.9, 0.7, 0.45);
     }
     colors.push(color.r, color.g, color.b);
     payloads.push(row);
@@ -53,7 +53,7 @@ export function buildChunkPoints(rows, pointRadius, basePointSize, starTexture) 
     size: basePointSize,
     vertexColors: true,
     transparent: true,
-    opacity: 0.95,
+    opacity: 0.72,
     map: starTexture,
     alphaMap: starTexture,
     depthWrite: false,

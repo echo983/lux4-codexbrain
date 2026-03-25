@@ -307,20 +307,21 @@ export function createFocusSystem({
     const baseSize = currentPointSize();
     const t = performance.now() * 0.001;
     
-    // Breathing animation: from 1.0X to 1.5X
+    // Breathing animation: from 1.0X to 1.5X of regular point size
     const breatheCycle = (1.0 + Math.sin(t * 2.5)) / 2.0; 
     const easedBreathe = Math.pow(breatheCycle, 1.5);
 
     // Update main highlight point (Range: 1.0 to 1.5)
+    // At minimum, it is exactly the same size as other points (baseSize * 1.0)
     topFocusHighlight.material.size = baseSize * (1.0 + 0.5 * easedBreathe);
-    topFocusHighlight.material.opacity = 0.75 + 0.25 * easedBreathe;
+    topFocusHighlight.material.opacity = 0.8 + 0.2 * easedBreathe;
     
-    // Update outer glow (Scaled proportionally)
-    topFocusGlow.material.size = topFocusHighlight.material.size * 2.0;
-    topFocusGlow.material.opacity = 0.2 + 0.3 * easedBreathe;
+    // Update outer glow (Softer, less intrusive)
+    topFocusGlow.material.size = topFocusHighlight.material.size * 1.8;
+    topFocusGlow.material.opacity = 0.1 + 0.3 * easedBreathe;
     topFocusGlow.material.color.lerpColors(
       new THREE.Color(0xffffff), 
-      new THREE.Color(0x85e3ff), 
+      new THREE.Color(0xadd8ff), // Subtler blue
       easedBreathe
     );
 

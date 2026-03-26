@@ -331,7 +331,7 @@ def search_keep_cards(
                 "priority": hit.priority,
                 "keep_md_fid": hit.keep_md_fid,
                 "md_url": nbss_object_url(hit.keep_md_fid, server_endpoint=server_endpoint) if hit.keep_md_fid else "",
-                "card_url": f"/asset-card?id={hit.id}" if hit.doc_kind == "asset_card" and hit.id else "",
+                "card_url": f"/asset-card?id={hit.id}" if hit.doc_kind == "asset_card" and hit.id and hit.card_schema == "deep_asset_card_v1" else "",
                 "keep_json_fid": hit.keep_json_fid,
                 "core_view": hit.core_view,
                 "intent": hit.intent,

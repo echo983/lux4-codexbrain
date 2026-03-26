@@ -45,6 +45,15 @@
   - `raw md` 入库
   - LanceDB 混合检索
   - `nfs打包交付`
+- 已完成手机视觉对象资产卡架构设计：
+  - [mobile-capture-asset-card-architecture.md](/root/lux4-codexbrain/docs/mobile-capture-asset-card-architecture.md)
+- 已完成手机视觉对象前端 / Android 对接规范：
+  - [mobile-capture-frontend-api.md](/root/lux4-codexbrain/docs/mobile-capture-frontend-api.md)
+- 已实现手机视觉资产卡写入服务骨架：
+  - `POST /api/v1/visual-cards`
+  - `GET /healthz`
+  - [visual_asset_card_service](/root/lux4-codexbrain/src/visual_asset_card_service/__main__.py)
+  - [run_visual_asset_card_smoke.py](/root/lux4-codexbrain/scripts/run_visual_asset_card_smoke.py)
 - 已实现在线 Keep 搜索服务：
   - [moreway_search_service](/root/lux4-codexbrain/src/moreway_search_service/__main__.py)
 - 已实现 `Moreway Planet` 数据集与材质处理链：

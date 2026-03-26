@@ -277,6 +277,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["doc_kind"], "asset_card")
         self.assertEqual(result["results"][0]["card_schema"], "mobile_capture_asset_card_v1")
         self.assertEqual(result["results"][0]["card_url"], "")
+        self.assertEqual(result["results"][0]["group_image_fids"], ["NBSS:0xIMG"])
 
     def test_search_page_renders_asset_card_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -457,6 +458,78 @@ class MorewaySearchServiceTests(unittest.TestCase):
                     body = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(body["query"], "china")
                 self.assertEqual(body["required_tags"], ["geo"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_mobile_search_api_returns_normalized_json(self) -> None:
+        config = Config(host="127.0.0.1", port=0, tables=["mobile"], vector_limit=20, per_page=20, min_score=0.4, asset_card_dir=Path("."))
+        server = build_server(config)
+        try:
+            with mock.patch(
+                "moreway_search_service.http.search_keep_cards",
+                return_value={
+                    "query": "menu",
+                    "tables": ["mobile"],
+                    "vector_limit": 20,
+                    "per_page": 20,
+                    "page": 1,
+                    "total_pages": 1,
+                    "total_results": 1,
+                    "min_score": 0.4,
+                    "required_tags": ["food"],
+                    "vector_hit_count": 1,
+                    "filtered_hit_count": 1,
+                    "results": [{
+                        "id": "mobile-1",
+                        "title": "历史菜单照片",
+                        "path_in_snapshot": "",
+                        "snippet": "一张法文菜单照片。",
+                        "rerank_score": 0.93,
+                        "created_at": "2026-03-26",
+                        "tags": ["food"],
+                        "keep_md_fid": "",
+                        "keep_json_fid": "",
+                        "note_title": "",
+                        "distance": 0.1,
+                        "source_table": "mobile",
+                        "doc_kind": "asset_card",
+                        "source_type": "mobile_photo_group",
+                        "card_schema": "mobile_capture_asset_card_v1",
+                        "category_path": "",
+                        "core_view": "",
+                        "intent": "",
+                        "cognitive_asset": "",
+                        "group_image_fids": ["NBSS:0xIMG1", "NBSS:0xIMG2"],
+                        "content_completeness": "partial",
+                        "observation_confidence": "medium",
+                        "md_url": "",
+                    }],
+                    "available_tags": [],
+                    "models": {"embedding": "e", "reranker": "r"},
+                },
+            ):
+                import threading
+                import urllib.request
+
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                host, port = server.server_address
+                req = urllib.request.Request(
+                    f"http://{host}:{port}/api/v1/mobile/search",
+                    data=json.dumps({"query": "menu", "tags": ["food"]}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(body["ok"])
+                self.assertEqual(body["query"], "menu")
+                self.assertEqual(body["appliedTags"], ["food"])
+                self.assertEqual(body["results"][0]["id"], "mobile-1")
+                self.assertEqual(body["results"][0]["imageRefs"], ["NBSS:0xIMG1", "NBSS:0xIMG2"])
+                self.assertEqual(body["results"][0]["contentCompleteness"], "partial")
+                self.assertEqual(body["results"][0]["observationConfidence"], "medium")
         finally:
             server.shutdown()
             server.server_close()

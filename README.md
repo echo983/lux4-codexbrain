@@ -49,6 +49,8 @@
   - [mobile-capture-asset-card-architecture.md](/root/lux4-codexbrain/docs/mobile-capture-asset-card-architecture.md)
 - 已完成手机视觉对象前端 / Android 对接规范：
   - [mobile-capture-frontend-api.md](/root/lux4-codexbrain/docs/mobile-capture-frontend-api.md)
+- 已完成手机端 Moreway Search 接口规范：
+  - [mobile-moreway-search-api.md](/root/lux4-codexbrain/docs/mobile-moreway-search-api.md)
 - 已实现手机视觉资产卡写入服务骨架：
   - `POST /api/v1/visual-cards`
   - `GET /healthz`
@@ -995,6 +997,15 @@ PYTHONPATH=src python3 -m moreway_search_service
 
 - `google_keep_asset_cards_directmd_eval200`
 - `google_keep_raw_md`
+- `mobile_capture_asset_cards`
+
+当前还提供移动端专用搜索接口：
+
+- `POST /api/v1/mobile/search`
+
+对应文档：
+
+- [mobile-moreway-search-api.md](/root/lux4-codexbrain/docs/mobile-moreway-search-api.md)
 
 可通过环境变量覆盖：
 

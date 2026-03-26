@@ -39,6 +39,9 @@ class SearchHit:
     core_view: str
     intent: str
     cognitive_asset: str
+    group_image_fids: list[str]
+    content_completeness: str
+    observation_confidence: str
 
 
 def _prefer_hit(left: SearchHit, right: SearchHit) -> SearchHit:
@@ -141,6 +144,15 @@ def _coerce_tags(frontmatter: dict[str, Any], metadata: dict[str, Any]) -> list[
         seen.add(key)
         deduped.append(item)
     return deduped
+
+
+def _coerce_string_list(*values: Any) -> list[str]:
+    for value in values:
+        if isinstance(value, list):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            if items:
+                return items
+    return []
 
 
 def _normalize_doc_kind(raw_id: str, metadata: dict[str, Any], frontmatter: dict[str, Any]) -> str:
@@ -264,6 +276,16 @@ def search_keep_cards(
                     core_view=core_view,
                     intent=intent,
                     cognitive_asset=cognitive_asset,
+                    group_image_fids=_coerce_string_list(
+                        metadata.get("group_image_fids"),
+                        frontmatter.get("group_image_fids"),
+                    ),
+                    content_completeness=str(
+                        metadata.get("content_completeness") or frontmatter.get("content_completeness") or ""
+                    ),
+                    observation_confidence=str(
+                        metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""
+                    ),
                 )
             )
 
@@ -336,6 +358,9 @@ def search_keep_cards(
                 "core_view": hit.core_view,
                 "intent": hit.intent,
                 "cognitive_asset": hit.cognitive_asset,
+                "group_image_fids": hit.group_image_fids,
+                "content_completeness": hit.content_completeness,
+                "observation_confidence": hit.observation_confidence,
             }
             for hit in paged_hits
         ],

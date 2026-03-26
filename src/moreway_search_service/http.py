@@ -111,11 +111,14 @@ def _render_asset_card_result(item: dict[str, Any], chips_html: str) -> str:
         details_list.append(f"<div class='asset-line'><span class='asset-key'>意图识别</span><span class='asset-value'>{html.escape(item['intent'])}</span></div>")
     if item.get("cognitive_asset"):
         details_list.append(f"<div class='asset-line'><span class='asset-key'>认知资产</span><span class='asset-value'>{html.escape(item['cognitive_asset'])}</span></div>")
+    details_html = "".join(details_list)
+    if not details_html and item.get("snippet"):
+        details_html = f"<div class='snippet'>{html.escape(item['snippet'])}</div>"
     info_line = " · ".join(filter(None, [item.get("category_path"), item.get("created_at")]))
     return (
         "<div class='card asset-card'>"
         f"  <div class='card-header'><span class='badge asset'>资产卡</span>{title_html}{action_btn}</div>"
-        f"  <div class='card-body'><div class='asset-details'>{''.join(details_list)}</div><div class='chips'>{chips_html}</div></div>"
+        f"  <div class='card-body'><div class='asset-details'>{details_html}</div><div class='chips'>{chips_html}</div></div>"
         f"  <div class='card-footer'><span>推荐度 {item['rerank_score']:.3f}</span><span>{info_line}</span><span class='path-assist'>{html.escape(item['path_in_snapshot'])}</span></div>"
         "</div>"
     )

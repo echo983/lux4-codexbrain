@@ -240,6 +240,44 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["intent"], "一条意图识别")
         self.assertEqual(result["results"][0]["cognitive_asset"], "一条认知资产")
 
+    def test_search_mobile_capture_asset_card_has_no_file_backed_card_url(self) -> None:
+        mobile = {
+            "id": "mobile-1",
+            "text": "---\ndoc_kind: asset_card\nsource_type: mobile_photo_group\ncard_schema: mobile_capture_asset_card_v1\ncontent_completeness: partial\n---\n\n# 这是什么\n一张菜单照片\n\n# 直接可见信息\n可见法文菜单内容。\n\n# 关键信息提炼\n历史菜单。\n\n# 限制与风险\n部分内容模糊。",
+            "metadata": {
+                "doc_kind": "asset_card",
+                "source_type": "mobile_photo_group",
+                "card_schema": "mobile_capture_asset_card_v1",
+                "capture_group_id": "cg_1",
+                "group_image_fids": ["NBSS:0xIMG"],
+            },
+            "_distance": 0.1,
+            "_source_table": "mobile",
+        }
+        with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
+            with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
+                with mock.patch("moreway_search_service.search.resolve_nbss_server_endpoint", return_value="http://localhost:8080"):
+                    with mock.patch("moreway_search_service.search.get_embeddings", return_value=[[0.1, 0.2]]):
+                        with mock.patch(
+                            "moreway_search_service.search.post_json",
+                            return_value={"results": [mobile]},
+                        ):
+                            with mock.patch(
+                                "moreway_search_service.search.rerank",
+                                return_value=[{"id": 0, "score": 0.95}],
+                            ):
+                                result = search_keep_cards(
+                                    "menu",
+                                    tables=["mobile"],
+                                    vector_limit=10,
+                                    per_page=10,
+                                    required_tags=[],
+                                    min_score=0.0,
+                                )
+        self.assertEqual(result["results"][0]["doc_kind"], "asset_card")
+        self.assertEqual(result["results"][0]["card_schema"], "mobile_capture_asset_card_v1")
+        self.assertEqual(result["results"][0]["card_url"], "")
+
     def test_search_page_renders_asset_card_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config = Config(
@@ -307,6 +345,75 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 self.assertIn("核心观点", body)
                 self.assertIn("意图识别", body)
                 self.assertIn("认知资产", body)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_search_page_renders_mobile_asset_card_snippet_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = Config(
+                host="127.0.0.1",
+                port=0,
+                tables=["mobile"],
+                vector_limit=10,
+                per_page=20,
+                min_score=0.1,
+                asset_card_dir=Path(tmpdir),
+            )
+            server = build_server(config)
+            try:
+                with mock.patch("moreway_search_service.http.search_keep_cards") as search_mock:
+                    search_mock.return_value = {
+                        "query": "menu",
+                        "tables": ["mobile"],
+                        "vector_limit": 10,
+                        "per_page": 20,
+                        "page": 1,
+                        "total_pages": 1,
+                        "total_results": 1,
+                        "min_score": 0.1,
+                        "required_tags": [],
+                        "vector_hit_count": 1,
+                        "filtered_hit_count": 1,
+                        "available_tags": [],
+                        "results": [
+                            {
+                                "id": "mobile-1",
+                                "title": "Untitled",
+                                "note_title": "",
+                                "path_in_snapshot": "",
+                                "snippet": "一张菜单照片，可见法文菜单内容。",
+                                "rerank_score": 0.92,
+                                "distance": 0.1,
+                                "source_table": "mobile",
+                                "doc_kind": "asset_card",
+                                "source_type": "mobile_photo_group",
+                                "card_schema": "mobile_capture_asset_card_v1",
+                                "created_at": "",
+                                "tags": [],
+                                "category_path": "",
+                                "priority": "",
+                                "keep_md_fid": "",
+                                "md_url": "",
+                                "card_url": "",
+                                "keep_json_fid": "",
+                                "core_view": "",
+                                "intent": "",
+                                "cognitive_asset": "",
+                            }
+                        ],
+                    }
+                    import threading
+                    import urllib.request
+
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    with urllib.request.urlopen(
+                        f"http://{server.server_address[0]}:{server.server_address[1]}/search?q=menu"
+                    ) as response:
+                        body = response.read().decode("utf-8")
+                self.assertIn("一张菜单照片，可见法文菜单内容。", body)
+                self.assertNotIn("查看 AI 分析", body)
             finally:
                 server.shutdown()
                 server.server_close()

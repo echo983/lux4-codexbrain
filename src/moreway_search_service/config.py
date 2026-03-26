@@ -10,6 +10,7 @@ DEFAULT_PORT = 18561
 DEFAULT_TABLES = [
     "google_keep_asset_cards_directmd_eval200",
     "google_keep_raw_md",
+    "mobile_capture_asset_cards",
 ]
 DEFAULT_VECTOR_LIMIT = 50
 DEFAULT_PER_PAGE = 20

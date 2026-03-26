@@ -1,0 +1,13 @@
+{
+  "objectHint": "名片",
+  "groupNote": "前端联调测试：单张名片样本",
+  "sourceClient": "android-apk",
+  "images": [
+    {
+      "contentBase64": "<replace-with-base64-image-bytes>",
+      "mimeType": "image/jpeg",
+      "order": 1,
+      "role": "front_1"
+    }
+  ]
+}

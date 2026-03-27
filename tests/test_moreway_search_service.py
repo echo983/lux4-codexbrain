@@ -578,6 +578,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 self.assertEqual(body["imageRefs"], ["NBSS:0xIMG1"])
                 self.assertEqual(body["detail"]["meta"]["contentCompleteness"], "partial")
                 self.assertEqual(body["detail"]["blocks"][0]["title"], "这是什么")
+                self.assertEqual(body["summary"], "一张菜单照片。")
         finally:
             server.shutdown()
             server.server_close()

@@ -77,6 +77,11 @@ class VisualAssetCardServiceTests(unittest.TestCase):
         self.assertEqual(upsert_payload["documents"][0]["metadata"]["group_image_fids"], ["NBSS:0xA", "NBSS:0xB"])
         self.assertEqual(result["cardSchema"], ASSET_CARD_SCHEMA)
         self.assertEqual(result["rowsWritten"], 1)
+        self.assertEqual(result["card"]["id"], result["cardId"])
+        self.assertEqual(result["card"]["sourceTable"], "mobile_cards")
+        self.assertEqual(result["card"]["imageRefs"], ["NBSS:0xA", "NBSS:0xB"])
+        self.assertEqual(result["card"]["detail"]["blocks"][0]["title"], "这是什么")
+        self.assertEqual(result["card"]["summary"], "名片")
 
     def test_parse_ingest_request_rejects_invalid_base64(self) -> None:
         payload = {

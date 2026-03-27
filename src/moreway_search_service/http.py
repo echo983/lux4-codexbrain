@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
+from mobile_card_api import build_mobile_card_detail_response
+
 from .config import Config
 from .search import fetch_card_by_id, search_keep_cards
 
@@ -76,83 +78,8 @@ def _log_search_event(event: str, **fields: Any) -> None:
         LOGGER.exception("failed_to_write_debug_log")
 
 
-def _extract_markdown_body(markdown_text: str) -> str:
-    if markdown_text.startswith("---\n"):
-        end = markdown_text.find("\n---\n", 4)
-        if end != -1:
-            return markdown_text[end + 5 :].strip()
-    return markdown_text.strip()
-
-
-def _build_markdown_blocks(markdown_text: str) -> list[dict[str, str]]:
-    body = _extract_markdown_body(markdown_text)
-    lines = body.splitlines()
-    blocks: list[dict[str, str]] = []
-    current_title = ""
-    current_lines: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            if current_title or current_lines:
-                blocks.append(
-                    {
-                        "type": "section",
-                        "title": current_title,
-                        "markdown": "\n".join(current_lines).strip(),
-                    }
-                )
-            current_title = stripped.lstrip("#").strip()
-            current_lines = []
-            continue
-        current_lines.append(line)
-    if current_title or current_lines:
-        blocks.append(
-            {
-                "type": "section",
-                "title": current_title,
-                "markdown": "\n".join(current_lines).strip(),
-            }
-        )
-    cleaned = [block for block in blocks if block["title"] or block["markdown"]]
-    if cleaned:
-        return cleaned
-    if body:
-        return [{"type": "section", "title": "", "markdown": body}]
-    return []
-
-
 def _build_mobile_detail_response(item: dict[str, Any]) -> dict[str, Any]:
-    markdown = str(item.get("markdown") or "").strip()
-    return {
-        "ok": True,
-        "id": str(item.get("id") or ""),
-        "docKind": str(item.get("doc_kind") or ""),
-        "cardSchema": str(item.get("card_schema") or ""),
-        "sourceType": str(item.get("source_type") or ""),
-        "sourceTable": str(item.get("source_table") or ""),
-        "title": str(item.get("title") or "").strip() or "Untitled",
-        "summary": str(item.get("core_view") or item.get("snippet") or "").strip(),
-        "createdAt": str(item.get("created_at") or ""),
-        "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
-        "imageRefs": [str(fid).strip() for fid in (item.get("group_image_fids") or []) if str(fid).strip()],
-        "mdUrl": str(item.get("md_url") or ""),
-        "markdown": markdown,
-        "detail": {
-            "schemaVersion": str(item.get("card_schema") or ""),
-            "highlights": {
-                "coreView": str(item.get("core_view") or ""),
-                "intent": str(item.get("intent") or ""),
-                "cognitiveAsset": str(item.get("cognitive_asset") or ""),
-            },
-            "meta": {
-                "contentCompleteness": str(item.get("content_completeness") or ""),
-                "observationConfidence": str(item.get("observation_confidence") or ""),
-                "categoryPath": str(item.get("category_path") or ""),
-                "priority": str(item.get("priority") or ""),
-            },
-            "blocks": _build_markdown_blocks(markdown),
-        },
-    }
+    return build_mobile_card_detail_response(item)
 
 
 def _parse_tag_values(values: list[str]) -> list[str]:

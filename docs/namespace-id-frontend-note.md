@@ -189,6 +189,70 @@ type NamespaceId = string
 
 这样最干净。
 
+## 命名规范建议
+
+推荐 `namespaceId` 使用：
+
+- 短
+- 稳定
+- 可读
+- 不直接暴露真实身份信息
+
+推荐格式：
+
+```text
+ns_<kind>_<token>
+```
+
+例如：
+
+- `ns_user_a13f09cd`
+- `ns_team_42d91ab0`
+- `ns_demo_20260327`
+
+### 推荐做法
+
+- `kind` 使用短类别：
+  - `user`
+  - `team`
+  - `demo`
+  - `lab`
+- `token` 使用稳定短标识
+  - 推荐 8 位十六进制短 hash
+  - 或者一个稳定的短 token
+
+推荐生成方式：
+
+```text
+ns_user_<sha1(stable_user_id)[:8]>
+```
+
+例如：
+
+- `ns_user_7f3a2c9d`
+
+### 不推荐
+
+不推荐直接使用：
+
+- 用户真实姓名
+- 邮箱
+- 手机号
+- 会频繁变化的展示名
+
+例如下面这些都不推荐：
+
+- `zhangsan`
+- `alice@gmail.com`
+- `madrid-lab-visible-name`
+
+### 一句话建议
+
+如果前端或上游系统需要自己生成：
+
+- 优先用 `ns_user_<8hex>`
+- 不要用敏感明文标识
+
 ## 一句话规则
 
 前端现在只要做到：

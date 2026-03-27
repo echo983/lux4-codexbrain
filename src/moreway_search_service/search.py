@@ -43,6 +43,7 @@ class SearchHit:
     group_image_fids: list[str]
     content_completeness: str
     observation_confidence: str
+    namespace_id: str
 
 
 def _prefer_hit(left: SearchHit, right: SearchHit) -> SearchHit:
@@ -167,6 +168,10 @@ def _normalize_doc_kind(raw_id: str, metadata: dict[str, Any], frontmatter: dict
     return ""
 
 
+def _extract_namespace_id(metadata: dict[str, Any], frontmatter: dict[str, Any]) -> str:
+    return str(metadata.get("namespace_id") or frontmatter.get("namespace_id") or "").strip()
+
+
 def search_keep_cards(
     query: str,
     *,
@@ -176,6 +181,7 @@ def search_keep_cards(
     page: int = 1,
     min_score: float = 0.4,
     required_tags: list[str] | None = None,
+    namespace_id: str = "",
 ) -> dict[str, Any]:
     server_endpoint = resolve_nbss_server_endpoint()
     emb_account_id, emb_token, emb_model = resolve_embedding_config()
@@ -207,15 +213,22 @@ def search_keep_cards(
         metadata = dict(item.get("metadata") or {})
         frontmatter = _parse_frontmatter(text)
         doc_kind = _normalize_doc_kind(raw_id, metadata, frontmatter)
+        item_namespace_id = _extract_namespace_id(metadata, frontmatter)
         tags = _coerce_tags(frontmatter, metadata)
         for tag in tags:
             tag_counts[tag] += 1
         normalized = _normalize_tags(tags)
         if required and not required.issubset(normalized):
             continue
+        if namespace_id:
+            if doc_kind != "asset_card":
+                continue
+            if item_namespace_id != namespace_id:
+                continue
         dedupe_key = (
             doc_kind,
             str(metadata.get("path_in_snapshot") or ""),
+            item_namespace_id,
         )
         if dedupe_key in seen_candidates:
             continue
@@ -254,6 +267,7 @@ def search_keep_cards(
             frontmatter = candidate["frontmatter"]
             text = candidate["text"]
             doc_kind = str(candidate.get("doc_kind") or "")
+            item_namespace_id = _extract_namespace_id(metadata, frontmatter)
             core_view, intent, cognitive_asset = _extract_card_fields(text)
             reranked_hits.append(
                 SearchHit(
@@ -287,6 +301,7 @@ def search_keep_cards(
                     observation_confidence=str(
                         metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""
                     ),
+                    namespace_id=item_namespace_id,
                 )
             )
 
@@ -333,6 +348,7 @@ def search_keep_cards(
         "total_results": total_results,
         "min_score": min_score,
         "required_tags": required_tags or [],
+        "namespace_id": namespace_id,
         "vector_hit_count": len(raw_results),
         "filtered_hit_count": len(filtered_candidates),
         "results": [
@@ -362,6 +378,7 @@ def search_keep_cards(
                 "group_image_fids": hit.group_image_fids,
                 "content_completeness": hit.content_completeness,
                 "observation_confidence": hit.observation_confidence,
+                "namespace_id": hit.namespace_id,
             }
             for hit in paged_hits
         ],
@@ -382,6 +399,7 @@ def fetch_card_by_id(
     tables: list[str],
     source_table: str = "",
     scan_limit: int = 100,
+    namespace_id: str = "",
 ) -> dict[str, Any] | None:
     target_id = str(card_id or "").strip()
     if not target_id:
@@ -406,6 +424,9 @@ def fetch_card_by_id(
             text = str(item.get("text", ""))
             metadata = dict(item.get("metadata") or {})
             frontmatter = _parse_frontmatter(text)
+            item_namespace_id = _extract_namespace_id(metadata, frontmatter)
+            if namespace_id and _normalize_doc_kind(target_id, metadata, frontmatter) == "asset_card" and item_namespace_id != namespace_id:
+                continue
             core_view, intent, cognitive_asset = _extract_card_fields(text)
             return {
                 "id": target_id,
@@ -438,5 +459,6 @@ def fetch_card_by_id(
                 else "",
                 "markdown": text,
                 "snippet": _build_snippet(text),
+                "namespace_id": item_namespace_id,
             }
     return None

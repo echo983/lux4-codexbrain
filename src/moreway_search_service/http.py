@@ -39,6 +39,7 @@ def _build_mobile_result_item(item: dict[str, Any]) -> dict[str, Any]:
         "cardSchema": str(item.get("card_schema") or ""),
         "sourceType": str(item.get("source_type") or ""),
         "sourceTable": str(item.get("source_table") or ""),
+        "namespaceId": str(item.get("namespace_id") or ""),
         "title": str(item.get("title") or "").strip() or "Untitled",
         "summary": summary,
         "subtitle": subtitle,
@@ -62,6 +63,7 @@ def _build_mobile_search_response(result: dict[str, Any]) -> dict[str, Any]:
         "totalPages": int(result.get("total_pages") or 1),
         "totalResults": int(result.get("total_results") or 0),
         "appliedTags": [str(tag).strip() for tag in (result.get("required_tags") or []) if str(tag).strip()],
+        "namespaceId": str(result.get("namespace_id") or ""),
         "results": items,
     }
 
@@ -408,6 +410,7 @@ class AppHandler(BaseHTTPRequestHandler):
             card_id = parsed.path.rsplit("/", 1)[-1].strip()
             params = parse_qs(parsed.query, keep_blank_values=False)
             source_table = (params.get("source_table") or [""])[0].strip()
+            namespace_id = (params.get("namespace_id") or [""])[0].strip()
             request_id = uuid.uuid4().hex[:12]
             _log_search_event(
                 "detail_request",
@@ -416,8 +419,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 method="GET",
                 card_id=card_id,
                 source_table=source_table,
+                namespace_id=namespace_id,
             )
-            item = fetch_card_by_id(card_id, tables=self.config.tables, source_table=source_table)
+            item = fetch_card_by_id(card_id, tables=self.config.tables, source_table=source_table, namespace_id=namespace_id)
             if item is None:
                 _log_search_event(
                     "detail_result",
@@ -426,6 +430,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     method="GET",
                     card_id=card_id,
                     source_table=source_table,
+                    namespace_id=namespace_id,
                     found=False,
                 )
                 self._write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "card_not_found"})
@@ -437,6 +442,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 method="GET",
                 card_id=card_id,
                 source_table=source_table or item.get("source_table"),
+                namespace_id=namespace_id or item.get("namespace_id"),
                 found=True,
                 card_schema=item.get("card_schema"),
             )
@@ -539,6 +545,7 @@ class AppHandler(BaseHTTPRequestHandler):
         per_page = int(payload.get("limit") or payload.get("per_page") or self.config.per_page)
         page = max(1, int(payload.get("page") or 1))
         min_score = float(payload.get("min_score") or self.config.min_score)
+        namespace_id = str(payload.get("namespaceId") or "").strip()
         request_id = uuid.uuid4().hex[:12]
         _log_search_event(
             "search_request",
@@ -551,6 +558,7 @@ class AppHandler(BaseHTTPRequestHandler):
             per_page=per_page,
             vector_limit=vector_limit,
             min_score=min_score,
+            namespace_id=namespace_id,
             tables=self.config.tables,
         )
         result = search_keep_cards(
@@ -561,6 +569,7 @@ class AppHandler(BaseHTTPRequestHandler):
             page=page,
             min_score=min_score,
             required_tags=tags,
+            namespace_id=namespace_id,
         )
         _log_search_event(
             "search_result",
@@ -572,6 +581,7 @@ class AppHandler(BaseHTTPRequestHandler):
             page=result.get("page"),
             per_page=result.get("per_page"),
             min_score=min_score,
+            namespace_id=namespace_id,
             total_results=result.get("total_results"),
             total_pages=result.get("total_pages"),
             vector_hit_count=result.get("vector_hit_count"),

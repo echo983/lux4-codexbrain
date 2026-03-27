@@ -15,6 +15,7 @@ from scripts.lancedb_local_api import post_json, resolve_lancedb_url
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.S)
 TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.M)
 CARD_FIELD_RE = re.compile(r"^\>\s+\*\*(核心观点|意图识别|认知资产)\*\*：\s*(.+?)\s*$", re.M)
+ZERO_VECTOR_DIM = 1024
 
 
 @dataclass(frozen=True)
@@ -373,3 +374,69 @@ def search_keep_cards(
             "reranker": rerank_model,
         },
     }
+
+
+def fetch_card_by_id(
+    card_id: str,
+    *,
+    tables: list[str],
+    source_table: str = "",
+    scan_limit: int = 100,
+) -> dict[str, Any] | None:
+    target_id = str(card_id or "").strip()
+    if not target_id:
+        return None
+    server_endpoint = resolve_nbss_server_endpoint()
+    candidate_tables = [source_table.strip()] if source_table.strip() else list(tables)
+    fallback_tables = [table for table in tables if table not in candidate_tables]
+    ordered_tables = candidate_tables + fallback_tables
+    zero_vector = [0.0] * ZERO_VECTOR_DIM
+    for table in ordered_tables:
+        search_response = post_json(
+            f"{resolve_lancedb_url()}/search",
+            {
+                "table": table,
+                "query_vector": zero_vector,
+                "limit": scan_limit,
+            },
+        )
+        for item in list(search_response.get("results") or []):
+            if str(item.get("id") or "").strip() != target_id:
+                continue
+            text = str(item.get("text", ""))
+            metadata = dict(item.get("metadata") or {})
+            frontmatter = _parse_frontmatter(text)
+            core_view, intent, cognitive_asset = _extract_card_fields(text)
+            return {
+                "id": target_id,
+                "title": _extract_title(text, metadata, frontmatter),
+                "doc_kind": _normalize_doc_kind(target_id, metadata, frontmatter),
+                "source_type": str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
+                "card_schema": str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
+                "created_at": str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
+                "tags": _coerce_tags(frontmatter, metadata),
+                "category_path": str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
+                "priority": str(metadata.get("priority") or frontmatter.get("priority") or ""),
+                "keep_md_fid": str(metadata.get("keep_md_fid") or ""),
+                "keep_json_fid": str(metadata.get("keep_json_fid") or ""),
+                "group_image_fids": _coerce_string_list(
+                    metadata.get("group_image_fids"),
+                    frontmatter.get("group_image_fids"),
+                ),
+                "content_completeness": str(
+                    metadata.get("content_completeness") or frontmatter.get("content_completeness") or ""
+                ),
+                "observation_confidence": str(
+                    metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""
+                ),
+                "core_view": core_view,
+                "intent": intent,
+                "cognitive_asset": cognitive_asset,
+                "source_table": table,
+                "md_url": nbss_object_url(str(metadata.get("keep_md_fid") or ""), server_endpoint=server_endpoint)
+                if str(metadata.get("keep_md_fid") or "").strip()
+                else "",
+                "markdown": text,
+                "snippet": _build_snippet(text),
+            }
+    return None

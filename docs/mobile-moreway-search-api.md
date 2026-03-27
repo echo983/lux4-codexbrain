@@ -12,6 +12,10 @@
 
 - `POST /api/v1/mobile/search`
 
+同时提供详情接口：
+
+- `GET /api/v1/mobile/cards/{id}?source_table=...`
+
 健康检查继续复用：
 
 - `GET /healthz`
@@ -130,6 +134,82 @@ Content-Type: application/json
 - `400` + `missing_query`
 - `404` + `not_found`
 
+### `GET /api/v1/mobile/cards/{id}`
+
+用途：
+
+- 给手机端拉取单张卡片的详情数据
+- 返回统一外壳和 schema 专属 `detail` payload
+
+查询参数：
+
+- `source_table`: 可选，但推荐传；移动端可直接复用搜索结果里的 `sourceTable`
+
+请求示例：
+
+```http
+GET /api/v1/mobile/cards/mobile_capture_1e393de41d014127?source_table=mobile_capture_asset_cards
+```
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "id": "mobile_capture_1e393de41d014127",
+  "docKind": "asset_card",
+  "cardSchema": "mobile_capture_asset_card_v1",
+  "sourceType": "mobile_photo_group",
+  "sourceTable": "mobile_capture_asset_cards",
+  "title": "这是什么",
+  "summary": "西班牙巴塞罗那实验室的检验结果领取说明。",
+  "createdAt": "",
+  "tags": [],
+  "imageRefs": [
+    "NBSS:0x6A15E856AF448635",
+    "NBSS:0x39A7EEAF58498600"
+  ],
+  "mdUrl": "",
+  "markdown": "---\\n...完整卡片 markdown ...",
+  "detail": {
+    "schemaVersion": "mobile_capture_asset_card_v1",
+    "highlights": {
+      "coreView": "",
+      "intent": "",
+      "cognitiveAsset": ""
+    },
+    "meta": {
+      "contentCompleteness": "partial",
+      "observationConfidence": "medium",
+      "categoryPath": "",
+      "priority": ""
+    },
+    "blocks": [
+      {
+        "type": "section",
+        "title": "这是什么",
+        "markdown": "..."
+      }
+    ]
+  }
+}
+```
+
+说明：
+
+- `markdown` 返回完整卡片正文，前端如需原样展示可以直接使用
+- `detail.blocks` 返回后端预解析好的块结构，便于按 schema 渲染
+- `detail.highlights` 是通用高价值字段；没有则为空字符串
+
+错误响应：
+
+```json
+{
+  "ok": false,
+  "error": "card_not_found"
+}
+```
+
 ## 前端使用建议
 
 - 搜索列表页优先使用：
@@ -145,9 +225,11 @@ Content-Type: application/json
 
 当前 v1 不包含：
 
-- 独立详情接口
 - 服务端高亮片段
 - 服务端聚合 facets
 - schema 专属详情结构
 
-这些能力以后可以在移动端契约之上继续扩展，但不进入当前 v1。
+其中：
+
+- 详情接口已经提供
+- 但 `detail.blocks` 仍然是通用块结构，不是每个 schema 的最终定制 UI 协议

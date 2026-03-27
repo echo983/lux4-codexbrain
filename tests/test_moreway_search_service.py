@@ -534,6 +534,54 @@ class MorewaySearchServiceTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_http_mobile_card_detail_returns_blocks(self) -> None:
+        config = Config(host="127.0.0.1", port=0, tables=["mobile"], vector_limit=20, per_page=20, min_score=0.4, asset_card_dir=Path("."))
+        server = build_server(config)
+        try:
+            with mock.patch(
+                "moreway_search_service.http.fetch_card_by_id",
+                return_value={
+                    "id": "mobile-1",
+                    "title": "这是什么",
+                    "doc_kind": "asset_card",
+                    "source_type": "mobile_photo_group",
+                    "card_schema": "mobile_capture_asset_card_v1",
+                    "created_at": "",
+                    "tags": [],
+                    "category_path": "",
+                    "priority": "",
+                    "group_image_fids": ["NBSS:0xIMG1"],
+                    "content_completeness": "partial",
+                    "observation_confidence": "medium",
+                    "core_view": "",
+                    "intent": "",
+                    "cognitive_asset": "",
+                    "source_table": "mobile_capture_asset_cards",
+                    "md_url": "",
+                    "snippet": "一张菜单照片。",
+                    "markdown": "---\nid: mobile-1\n---\n\n# 这是什么\n一张菜单照片。\n\n# 限制与风险\n部分模糊。",
+                },
+            ):
+                import threading
+                import urllib.request
+
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                host, port = server.server_address
+                with urllib.request.urlopen(
+                    f"http://{host}:{port}/api/v1/mobile/cards/mobile-1?source_table=mobile_capture_asset_cards",
+                    timeout=5,
+                ) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(body["ok"])
+                self.assertEqual(body["id"], "mobile-1")
+                self.assertEqual(body["imageRefs"], ["NBSS:0xIMG1"])
+                self.assertEqual(body["detail"]["meta"]["contentCompleteness"], "partial")
+                self.assertEqual(body["detail"]["blocks"][0]["title"], "这是什么")
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_search_page_links_title_to_md_url(self) -> None:
         config = Config(host="127.0.0.1", port=0, tables=["cards"], vector_limit=20, per_page=20, min_score=0.4, asset_card_dir=Path("."))
         server = build_server(config)

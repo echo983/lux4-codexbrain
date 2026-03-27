@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
 from .config import Config
-from .search import search_keep_cards
+from .search import fetch_card_by_id, search_keep_cards
 
 
 LOGGER = logging.getLogger(__name__)
@@ -74,6 +74,85 @@ def _log_search_event(event: str, **fields: Any) -> None:
         DEBUG_LOGGER.info(json.dumps(payload, ensure_ascii=False))
     except Exception:
         LOGGER.exception("failed_to_write_debug_log")
+
+
+def _extract_markdown_body(markdown_text: str) -> str:
+    if markdown_text.startswith("---\n"):
+        end = markdown_text.find("\n---\n", 4)
+        if end != -1:
+            return markdown_text[end + 5 :].strip()
+    return markdown_text.strip()
+
+
+def _build_markdown_blocks(markdown_text: str) -> list[dict[str, str]]:
+    body = _extract_markdown_body(markdown_text)
+    lines = body.splitlines()
+    blocks: list[dict[str, str]] = []
+    current_title = ""
+    current_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current_title or current_lines:
+                blocks.append(
+                    {
+                        "type": "section",
+                        "title": current_title,
+                        "markdown": "\n".join(current_lines).strip(),
+                    }
+                )
+            current_title = stripped.lstrip("#").strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_title or current_lines:
+        blocks.append(
+            {
+                "type": "section",
+                "title": current_title,
+                "markdown": "\n".join(current_lines).strip(),
+            }
+        )
+    cleaned = [block for block in blocks if block["title"] or block["markdown"]]
+    if cleaned:
+        return cleaned
+    if body:
+        return [{"type": "section", "title": "", "markdown": body}]
+    return []
+
+
+def _build_mobile_detail_response(item: dict[str, Any]) -> dict[str, Any]:
+    markdown = str(item.get("markdown") or "").strip()
+    return {
+        "ok": True,
+        "id": str(item.get("id") or ""),
+        "docKind": str(item.get("doc_kind") or ""),
+        "cardSchema": str(item.get("card_schema") or ""),
+        "sourceType": str(item.get("source_type") or ""),
+        "sourceTable": str(item.get("source_table") or ""),
+        "title": str(item.get("title") or "").strip() or "Untitled",
+        "summary": str(item.get("core_view") or item.get("snippet") or "").strip(),
+        "createdAt": str(item.get("created_at") or ""),
+        "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
+        "imageRefs": [str(fid).strip() for fid in (item.get("group_image_fids") or []) if str(fid).strip()],
+        "mdUrl": str(item.get("md_url") or ""),
+        "markdown": markdown,
+        "detail": {
+            "schemaVersion": str(item.get("card_schema") or ""),
+            "highlights": {
+                "coreView": str(item.get("core_view") or ""),
+                "intent": str(item.get("intent") or ""),
+                "cognitiveAsset": str(item.get("cognitive_asset") or ""),
+            },
+            "meta": {
+                "contentCompleteness": str(item.get("content_completeness") or ""),
+                "observationConfidence": str(item.get("observation_confidence") or ""),
+                "categoryPath": str(item.get("category_path") or ""),
+                "priority": str(item.get("priority") or ""),
+            },
+            "blocks": _build_markdown_blocks(markdown),
+        },
+    }
 
 
 def _parse_tag_values(values: list[str]) -> list[str]:
@@ -397,6 +476,44 @@ class AppHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/healthz":
             self._write_json(HTTPStatus.OK, {"ok": True, "service": "moreway-search-service"})
+            return
+        if parsed.path.startswith("/api/v1/mobile/cards/"):
+            card_id = parsed.path.rsplit("/", 1)[-1].strip()
+            params = parse_qs(parsed.query, keep_blank_values=False)
+            source_table = (params.get("source_table") or [""])[0].strip()
+            request_id = uuid.uuid4().hex[:12]
+            _log_search_event(
+                "detail_request",
+                request_id=request_id,
+                endpoint=parsed.path,
+                method="GET",
+                card_id=card_id,
+                source_table=source_table,
+            )
+            item = fetch_card_by_id(card_id, tables=self.config.tables, source_table=source_table)
+            if item is None:
+                _log_search_event(
+                    "detail_result",
+                    request_id=request_id,
+                    endpoint=parsed.path,
+                    method="GET",
+                    card_id=card_id,
+                    source_table=source_table,
+                    found=False,
+                )
+                self._write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "card_not_found"})
+                return
+            _log_search_event(
+                "detail_result",
+                request_id=request_id,
+                endpoint=parsed.path,
+                method="GET",
+                card_id=card_id,
+                source_table=source_table or item.get("source_table"),
+                found=True,
+                card_schema=item.get("card_schema"),
+            )
+            self._write_json(HTTPStatus.OK, _build_mobile_detail_response(item))
             return
         if parsed.path == "/asset-card":
             params = parse_qs(parsed.query, keep_blank_values=False)

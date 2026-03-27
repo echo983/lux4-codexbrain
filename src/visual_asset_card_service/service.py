@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
 
+from mobile_card_api import build_mobile_card_detail_response
 from scripts.cloudflare_bge_m3_embed import get_embeddings, resolve_config as resolve_embedding_config
 from scripts.lancedb_local_api import post_json, resolve_lancedb_url
 from scripts.openai_image_generate import resolve_config as resolve_openai_config
@@ -259,6 +260,28 @@ class VisualAssetCardService:
                 ],
             },
         )
+        card = build_mobile_card_detail_response(
+            {
+                "id": card_id,
+                "doc_kind": ASSET_DOC_KIND,
+                "card_schema": ASSET_CARD_SCHEMA,
+                "source_type": ASSET_SOURCE_TYPE,
+                "source_table": str(response.get("table") or self.config.table),
+                "title": "",
+                "created_at": "",
+                "tags": [],
+                "group_image_fids": image_fids,
+                "md_url": "",
+                "markdown": markdown,
+                "core_view": "",
+                "intent": "",
+                "cognitive_asset": "",
+                "content_completeness": "partial",
+                "observation_confidence": "medium",
+                "category_path": "",
+                "priority": "",
+            }
+        )
         return {
             "ok": True,
             "cardId": card_id,
@@ -268,4 +291,5 @@ class VisualAssetCardService:
             "groupImageFids": image_fids,
             "rowsWritten": int(response.get("rows_written", 0)),
             "table": str(response.get("table") or self.config.table),
+            "card": card,
         }

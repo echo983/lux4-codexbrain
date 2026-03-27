@@ -3,16 +3,83 @@ from __future__ import annotations
 import html
 import json
 import logging
+import time
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlencode
 
+from mobile_card_api import build_mobile_card_detail_response
+
 from .config import Config
-from .search import search_keep_cards
+from .search import fetch_card_by_id, search_keep_cards
 
 
 LOGGER = logging.getLogger(__name__)
+DEBUG_LOGGER = logging.getLogger("moreway_search_service.debug")
+
+
+def _build_mobile_result_item(item: dict[str, Any]) -> dict[str, Any]:
+    image_refs = [str(fid).strip() for fid in (item.get("group_image_fids") or []) if str(fid).strip()]
+    summary = str(item.get("core_view") or item.get("snippet") or "").strip()
+    if not summary:
+        summary = str(item.get("title") or "").strip()
+    detail_fields = [
+        str(item.get("intent") or "").strip(),
+        str(item.get("cognitive_asset") or "").strip(),
+        str(item.get("category_path") or "").strip(),
+    ]
+    subtitle = " · ".join(part for part in detail_fields if part)
+    if not subtitle:
+        subtitle = str(item.get("source_type") or item.get("doc_kind") or "").strip()
+    return {
+        "id": str(item.get("id") or ""),
+        "docKind": str(item.get("doc_kind") or ""),
+        "cardSchema": str(item.get("card_schema") or ""),
+        "sourceType": str(item.get("source_type") or ""),
+        "sourceTable": str(item.get("source_table") or ""),
+        "title": str(item.get("title") or "").strip() or "Untitled",
+        "summary": summary,
+        "subtitle": subtitle,
+        "createdAt": str(item.get("created_at") or ""),
+        "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
+        "score": item.get("rerank_score"),
+        "imageRefs": image_refs,
+        "contentCompleteness": str(item.get("content_completeness") or ""),
+        "observationConfidence": str(item.get("observation_confidence") or ""),
+        "mdUrl": str(item.get("md_url") or ""),
+    }
+
+
+def _build_mobile_search_response(result: dict[str, Any]) -> dict[str, Any]:
+    items = [_build_mobile_result_item(item) for item in result.get("results", [])]
+    return {
+        "ok": True,
+        "query": str(result.get("query") or ""),
+        "page": int(result.get("page") or 1),
+        "pageSize": int(result.get("per_page") or 0),
+        "totalPages": int(result.get("total_pages") or 1),
+        "totalResults": int(result.get("total_results") or 0),
+        "appliedTags": [str(tag).strip() for tag in (result.get("required_tags") or []) if str(tag).strip()],
+        "results": items,
+    }
+
+
+def _log_search_event(event: str, **fields: Any) -> None:
+    payload = {
+        "ts": int(time.time()),
+        "event": event,
+        **fields,
+    }
+    try:
+        DEBUG_LOGGER.info(json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        LOGGER.exception("failed_to_write_debug_log")
+
+
+def _build_mobile_detail_response(item: dict[str, Any]) -> dict[str, Any]:
+    return build_mobile_card_detail_response(item)
 
 
 def _parse_tag_values(values: list[str]) -> list[str]:
@@ -337,6 +404,44 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/healthz":
             self._write_json(HTTPStatus.OK, {"ok": True, "service": "moreway-search-service"})
             return
+        if parsed.path.startswith("/api/v1/mobile/cards/"):
+            card_id = parsed.path.rsplit("/", 1)[-1].strip()
+            params = parse_qs(parsed.query, keep_blank_values=False)
+            source_table = (params.get("source_table") or [""])[0].strip()
+            request_id = uuid.uuid4().hex[:12]
+            _log_search_event(
+                "detail_request",
+                request_id=request_id,
+                endpoint=parsed.path,
+                method="GET",
+                card_id=card_id,
+                source_table=source_table,
+            )
+            item = fetch_card_by_id(card_id, tables=self.config.tables, source_table=source_table)
+            if item is None:
+                _log_search_event(
+                    "detail_result",
+                    request_id=request_id,
+                    endpoint=parsed.path,
+                    method="GET",
+                    card_id=card_id,
+                    source_table=source_table,
+                    found=False,
+                )
+                self._write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "card_not_found"})
+                return
+            _log_search_event(
+                "detail_result",
+                request_id=request_id,
+                endpoint=parsed.path,
+                method="GET",
+                card_id=card_id,
+                source_table=source_table or item.get("source_table"),
+                found=True,
+                card_schema=item.get("card_schema"),
+            )
+            self._write_json(HTTPStatus.OK, _build_mobile_detail_response(item))
+            return
         if parsed.path == "/asset-card":
             params = parse_qs(parsed.query, keep_blank_values=False)
             card_id = (params.get("id") or [""])[0].strip()
@@ -356,7 +461,21 @@ class AppHandler(BaseHTTPRequestHandler):
             page = max(1, int((params.get("page") or ["1"])[0]))
             min_score = float((params.get("min_score") or [str(self.config.min_score)])[0])
             result = None
+            request_id = uuid.uuid4().hex[:12]
             if query:
+                _log_search_event(
+                    "search_request",
+                    request_id=request_id,
+                    endpoint="/search",
+                    method="GET",
+                    query=query,
+                    tags=tags,
+                    page=page,
+                    per_page=self.config.per_page,
+                    vector_limit=self.config.vector_limit,
+                    min_score=min_score,
+                    tables=self.config.tables,
+                )
                 result = search_keep_cards(
                     query,
                     tables=self.config.tables,
@@ -366,21 +485,52 @@ class AppHandler(BaseHTTPRequestHandler):
                     min_score=min_score,
                     required_tags=tags,
                 )
+                _log_search_event(
+                    "search_result",
+                    request_id=request_id,
+                    endpoint="/search",
+                    method="GET",
+                    query=query,
+                    tags=tags,
+                    page=result.get("page"),
+                    per_page=result.get("per_page"),
+                    min_score=min_score,
+                    total_results=result.get("total_results"),
+                    total_pages=result.get("total_pages"),
+                    vector_hit_count=result.get("vector_hit_count"),
+                    filtered_hit_count=result.get("filtered_hit_count"),
+                    top_ids=[str(item.get("id") or "") for item in (result.get("results") or [])[:5]],
+                )
             self._write_html(HTTPStatus.OK, _render_search_page(self.config, query, tags, result))
             return
         self._write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path != "/api/v1/search":
+        if parsed.path not in {"/api/v1/search", "/api/v1/mobile/search"}:
             self._write_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
             return
         payload = self._read_json_body()
         if payload is None:
+            _log_search_event(
+                "search_error",
+                request_id=uuid.uuid4().hex[:12],
+                endpoint=parsed.path,
+                method="POST",
+                error="invalid_json",
+            )
             self._write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_json"})
             return
         query = str(payload.get("query") or "").strip()
         if not query:
+            _log_search_event(
+                "search_error",
+                request_id=uuid.uuid4().hex[:12],
+                endpoint=parsed.path,
+                method="POST",
+                error="missing_query",
+                payload_keys=sorted(payload.keys()),
+            )
             self._write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "missing_query"})
             return
         tags_raw = payload.get("tags") or []
@@ -389,6 +539,20 @@ class AppHandler(BaseHTTPRequestHandler):
         per_page = int(payload.get("limit") or payload.get("per_page") or self.config.per_page)
         page = max(1, int(payload.get("page") or 1))
         min_score = float(payload.get("min_score") or self.config.min_score)
+        request_id = uuid.uuid4().hex[:12]
+        _log_search_event(
+            "search_request",
+            request_id=request_id,
+            endpoint=parsed.path,
+            method="POST",
+            query=query,
+            tags=tags,
+            page=page,
+            per_page=per_page,
+            vector_limit=vector_limit,
+            min_score=min_score,
+            tables=self.config.tables,
+        )
         result = search_keep_cards(
             query,
             tables=self.config.tables,
@@ -398,6 +562,25 @@ class AppHandler(BaseHTTPRequestHandler):
             min_score=min_score,
             required_tags=tags,
         )
+        _log_search_event(
+            "search_result",
+            request_id=request_id,
+            endpoint=parsed.path,
+            method="POST",
+            query=query,
+            tags=tags,
+            page=result.get("page"),
+            per_page=result.get("per_page"),
+            min_score=min_score,
+            total_results=result.get("total_results"),
+            total_pages=result.get("total_pages"),
+            vector_hit_count=result.get("vector_hit_count"),
+            filtered_hit_count=result.get("filtered_hit_count"),
+            top_ids=[str(item.get("id") or "") for item in (result.get("results") or [])[:5]],
+        )
+        if parsed.path == "/api/v1/mobile/search":
+            self._write_json(HTTPStatus.OK, _build_mobile_search_response(result))
+            return
         self._write_json(HTTPStatus.OK, result)
 
     def log_message(self, fmt: str, *args: Any) -> None:

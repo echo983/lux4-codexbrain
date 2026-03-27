@@ -49,6 +49,8 @@
   - [mobile-capture-asset-card-architecture.md](/root/lux4-codexbrain/docs/mobile-capture-asset-card-architecture.md)
 - 已完成手机视觉对象前端 / Android 对接规范：
   - [mobile-capture-frontend-api.md](/root/lux4-codexbrain/docs/mobile-capture-frontend-api.md)
+- 已完成手机端 Moreway Search 接口规范：
+  - [mobile-moreway-search-api.md](/root/lux4-codexbrain/docs/mobile-moreway-search-api.md)
 - 已实现手机视觉资产卡写入服务骨架：
   - `POST /api/v1/visual-cards`
   - `GET /healthz`
@@ -56,6 +58,9 @@
   - [run_visual_asset_card_smoke.py](/root/lux4-codexbrain/scripts/run_visual_asset_card_smoke.py)
 - 已实现在线 Keep 搜索服务：
   - [moreway_search_service](/root/lux4-codexbrain/src/moreway_search_service/__main__.py)
+- 已实现基于 `ratatui` 的 daemon 管理 TUI：
+  - [tools/daemon_manager_tui/Cargo.toml](/root/lux4-codexbrain/tools/daemon_manager_tui/Cargo.toml)
+  - [tools/daemon_manager_tui/src/main.rs](/root/lux4-codexbrain/tools/daemon_manager_tui/src/main.rs)
 - 已实现 `Moreway Planet` 数据集与材质处理链：
   - [build_moreway_planet_dataset.py](/root/lux4-codexbrain/scripts/build_moreway_planet_dataset.py)
   - [bake_moreway_planet_material_textures.py](/root/lux4-codexbrain/scripts/bake_moreway_planet_material_textures.py)
@@ -995,6 +1000,16 @@ PYTHONPATH=src python3 -m moreway_search_service
 
 - `google_keep_asset_cards_directmd_eval200`
 - `google_keep_raw_md`
+- `mobile_capture_asset_cards`
+
+当前还提供移动端专用搜索接口：
+
+- `POST /api/v1/mobile/search`
+- `GET /api/v1/mobile/cards/{id}`
+
+对应文档：
+
+- [mobile-moreway-search-api.md](/root/lux4-codexbrain/docs/mobile-moreway-search-api.md)
 
 可通过环境变量覆盖：
 
@@ -1004,6 +1019,58 @@ PYTHONPATH=src python3 -m moreway_search_service
 - `MOREWAY_VECTOR_LIMIT`
 - `MOREWAY_PER_PAGE`
 - `MOREWAY_MIN_SCORE`
+
+---
+
+## Daemon Manager TUI
+
+仓库现在包含一个基于 `ratatui` 的终端管理器，用来查看和控制当前几个 Python daemon：
+
+- `lux4_daemon`
+- `moreway_search_service`
+- `visual_asset_card_service`
+
+运行：
+
+```bash
+cd /root/lux4-codexbrain/tools/daemon_manager_tui
+cargo run
+```
+
+快捷键：
+
+- `j` / `k` 或方向键：切换 daemon
+- `s`：启动选中 daemon
+- `x`：停止选中 daemon
+- `R`：重启选中 daemon
+- `S`：启动全部 daemon
+- `X`：停止全部 daemon
+- `r`：刷新状态
+- `h`：打开 / 关闭 help 页
+- `q`：退出
+
+说明：
+
+- 启动命令直接复用现有 `python3 -m ...` 入口，不改 daemon 本身
+- 启动前会自动加载仓库根目录 `.env`，再启动选中的 daemon
+- 程序会读取选中 daemon 的 stdout log 尾部，便于排查启动失败
+- 默认自动化监测始终开启：
+  - 状态快照：`var/daemon_manager/status.json`
+  - 事件日志：`var/logs/daemon_manager_events.jsonl`
+  - daemon stdout 日志：`var/logs/*.stdout.log`
+
+非交互接口：
+
+```bash
+cd /root/lux4-codexbrain/tools/daemon_manager_tui
+
+cargo run -- status --json
+cargo run -- start-all
+cargo run -- stop-all
+cargo run -- start moreway_search_service
+cargo run -- stop visual_asset_card_service
+cargo run -- restart lux4_daemon
+```
 
 ---
 

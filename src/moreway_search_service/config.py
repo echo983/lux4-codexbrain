@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -16,6 +16,7 @@ DEFAULT_VECTOR_LIMIT = 50
 DEFAULT_PER_PAGE = 20
 DEFAULT_MIN_SCORE = 0.1
 DEFAULT_ASSET_CARD_DIR = "var/google_keep_asset_cards_directmd_eval200"
+DEFAULT_DEBUG_LOG_PATH = "var/logs/moreway_search_service.jsonl"
 
 
 def _load_dotenv_file(path: Path) -> dict[str, str]:
@@ -50,6 +51,7 @@ class Config:
     per_page: int
     min_score: float
     asset_card_dir: Path
+    debug_log_path: Path = field(default_factory=lambda: Path(DEFAULT_DEBUG_LOG_PATH))
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -94,4 +96,5 @@ class Config:
             per_page=read_int("MOREWAY_PER_PAGE", DEFAULT_PER_PAGE),
             min_score=read_float("MOREWAY_MIN_SCORE", DEFAULT_MIN_SCORE),
             asset_card_dir=(repo_root / read_value("MOREWAY_ASSET_CARD_DIR", DEFAULT_ASSET_CARD_DIR)).resolve(),
+            debug_log_path=(repo_root / read_value("MOREWAY_DEBUG_LOG_PATH", DEFAULT_DEBUG_LOG_PATH)).resolve(),
         )

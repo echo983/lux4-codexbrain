@@ -34,6 +34,7 @@ class IngestRequest:
     object_hint: str
     group_note: str
     source_client: str
+    namespace_id: str
     images: list[InputImage]
 
 
@@ -43,6 +44,7 @@ def parse_ingest_request(payload: dict[str, Any] | str | None) -> IngestRequest:
     object_hint = str(payload.get("objectHint") or "").strip()
     group_note = str(payload.get("groupNote") or "").strip()
     source_client = str(payload.get("sourceClient") or "").strip()
+    namespace_id = str(payload.get("namespaceId") or "").strip()
     raw_images = payload.get("images")
     if not isinstance(raw_images, list) or not raw_images:
         raise ValueError("images must be a non-empty array")
@@ -72,6 +74,7 @@ def parse_ingest_request(payload: dict[str, Any] | str | None) -> IngestRequest:
         object_hint=object_hint,
         group_note=group_note,
         source_client=source_client,
+        namespace_id=namespace_id,
         images=images,
     )
 
@@ -206,6 +209,7 @@ def build_card_markdown(
         'content_completeness: "partial"\n'
         'observation_confidence: "medium"\n'
         f'source_client: "{request_data.source_client}"\n'
+        f'namespace_id: "{request_data.namespace_id}"\n'
         "---\n\n"
         f"{body_markdown.strip()}\n\n"
         "## NBSS 图像引用\n"
@@ -245,6 +249,7 @@ class VisualAssetCardService:
             "content_completeness": "partial",
             "observation_confidence": "medium",
             "source_client": request_data.source_client,
+            "namespace_id": request_data.namespace_id,
         }
         response = post_json(
             f"{resolve_lancedb_url()}/upsert",
@@ -280,6 +285,7 @@ class VisualAssetCardService:
                 "observation_confidence": "medium",
                 "category_path": "",
                 "priority": "",
+                "namespace_id": request_data.namespace_id,
             }
         )
         return {
@@ -289,6 +295,7 @@ class VisualAssetCardService:
             "status": "written",
             "captureGroupId": capture_group_id,
             "groupImageFids": image_fids,
+            "namespaceId": request_data.namespace_id,
             "rowsWritten": int(response.get("rows_written", 0)),
             "table": str(response.get("table") or self.config.table),
             "card": card,

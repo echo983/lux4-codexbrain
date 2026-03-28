@@ -22,6 +22,7 @@ class VisualAssetCardServiceTests(unittest.TestCase):
             "objectHint": "菜单",
             "groupNote": "两张",
             "sourceClient": "android-apk",
+            "namespaceId": "user_a",
             "images": [
                 {
                     "contentBase64": base64.b64encode(b"b").decode("ascii"),
@@ -41,12 +42,14 @@ class VisualAssetCardServiceTests(unittest.TestCase):
         self.assertEqual([item.order for item in result.images], [1, 2])
         self.assertEqual(result.images[0].content_bytes, b"a")
         self.assertEqual(result.object_hint, "菜单")
+        self.assertEqual(result.namespace_id, "user_a")
 
     def test_ingest_writes_nbss_and_lancedb(self) -> None:
         payload = {
             "objectHint": "名片",
             "groupNote": "正反面",
             "sourceClient": "android-apk",
+            "namespaceId": "user_a",
             "images": [
                 {
                     "contentBase64": base64.b64encode(b"img-a").decode("ascii"),
@@ -75,10 +78,13 @@ class VisualAssetCardServiceTests(unittest.TestCase):
         upsert_payload = upsert_mock.call_args.args[1]
         self.assertEqual(upsert_payload["table"], "mobile_cards")
         self.assertEqual(upsert_payload["documents"][0]["metadata"]["group_image_fids"], ["NBSS:0xA", "NBSS:0xB"])
+        self.assertEqual(upsert_payload["documents"][0]["metadata"]["namespace_id"], "user_a")
         self.assertEqual(result["cardSchema"], ASSET_CARD_SCHEMA)
         self.assertEqual(result["rowsWritten"], 1)
+        self.assertEqual(result["namespaceId"], "user_a")
         self.assertEqual(result["card"]["id"], result["cardId"])
         self.assertEqual(result["card"]["sourceTable"], "mobile_cards")
+        self.assertEqual(result["card"]["namespaceId"], "user_a")
         self.assertEqual(result["card"]["imageRefs"], ["NBSS:0xA", "NBSS:0xB"])
         self.assertEqual(result["card"]["detail"]["blocks"][0]["title"], "这是什么")
         self.assertEqual(result["card"]["summary"], "名片")

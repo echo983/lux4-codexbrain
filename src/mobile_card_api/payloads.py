@@ -85,6 +85,7 @@ def build_mobile_card_detail_response(item: Mapping[str, Any], *, ok: bool = Tru
         "cardSchema": str(item.get("card_schema") or ""),
         "sourceType": str(item.get("source_type") or ""),
         "sourceTable": str(item.get("source_table") or ""),
+        "namespaceId": str(item.get("namespace_id") or ""),
         "title": title,
         "summary": summary,
         "createdAt": str(item.get("created_at") or ""),

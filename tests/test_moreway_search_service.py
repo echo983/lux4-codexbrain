@@ -250,6 +250,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 "card_schema": "mobile_capture_asset_card_v1",
                 "capture_group_id": "cg_1",
                 "group_image_fids": ["NBSS:0xIMG"],
+                "namespace_id": "user_a",
             },
             "_distance": 0.1,
             "_source_table": "mobile",
@@ -278,6 +279,48 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["card_schema"], "mobile_capture_asset_card_v1")
         self.assertEqual(result["results"][0]["card_url"], "")
         self.assertEqual(result["results"][0]["group_image_fids"], ["NBSS:0xIMG"])
+        self.assertEqual(result["results"][0]["namespace_id"], "user_a")
+
+    def test_search_namespace_filters_asset_cards_and_excludes_raw_docs(self) -> None:
+        asset = {
+            "id": "asset-1",
+            "text": "---\ndoc_kind: asset_card\nsource_type: mobile_photo_group\ncard_schema: mobile_capture_asset_card_v1\nnamespace_id: user_a\n---\n\n# 这是什么\n名片",
+            "metadata": {
+                "doc_kind": "asset_card",
+                "source_type": "mobile_photo_group",
+                "card_schema": "mobile_capture_asset_card_v1",
+                "group_image_fids": ["NBSS:0xIMG"],
+                "namespace_id": "user_a",
+            },
+            "_distance": 0.1,
+        }
+        raw = {
+            "id": "raw-1",
+            "text": "# 原始文档\n\nhello",
+            "metadata": {
+                "doc_kind": "raw_text",
+                "source_type": "google_keep",
+            },
+            "_distance": 0.2,
+        }
+        with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
+            with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
+                with mock.patch("moreway_search_service.search.resolve_nbss_server_endpoint", return_value="http://localhost:8080"):
+                    with mock.patch("moreway_search_service.search.get_embeddings", return_value=[[0.1, 0.2]]):
+                        with mock.patch("moreway_search_service.search.post_json", return_value={"results": [asset, raw]}):
+                            with mock.patch("moreway_search_service.search.rerank", return_value=[{"id": 0, "score": 0.95}]):
+                                result = search_keep_cards(
+                                    "名片",
+                                    tables=["mixed"],
+                                    vector_limit=10,
+                                    per_page=10,
+                                    required_tags=[],
+                                    namespace_id="user_a",
+                                    min_score=0.0,
+                                )
+        self.assertEqual(result["total_results"], 1)
+        self.assertEqual(result["results"][0]["id"], "asset-1")
+        self.assertEqual(result["results"][0]["namespace_id"], "user_a")
 
     def test_search_page_renders_asset_card_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -478,6 +521,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                     "total_results": 1,
                     "min_score": 0.4,
                     "required_tags": ["food"],
+                    "namespace_id": "user_a",
                     "vector_hit_count": 1,
                     "filtered_hit_count": 1,
                     "results": [{
@@ -503,6 +547,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                         "group_image_fids": ["NBSS:0xIMG1", "NBSS:0xIMG2"],
                         "content_completeness": "partial",
                         "observation_confidence": "medium",
+                        "namespace_id": "user_a",
                         "md_url": "",
                     }],
                     "available_tags": [],
@@ -517,7 +562,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 host, port = server.server_address
                 req = urllib.request.Request(
                     f"http://{host}:{port}/api/v1/mobile/search",
-                    data=json.dumps({"query": "menu", "tags": ["food"]}).encode("utf-8"),
+                    data=json.dumps({"query": "menu", "tags": ["food"], "namespaceId": "user_a"}).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
@@ -527,6 +572,8 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 self.assertEqual(body["query"], "menu")
                 self.assertEqual(body["appliedTags"], ["food"])
                 self.assertEqual(body["results"][0]["id"], "mobile-1")
+                self.assertEqual(body["namespaceId"], "user_a")
+                self.assertEqual(body["results"][0]["namespaceId"], "user_a")
                 self.assertEqual(body["results"][0]["imageRefs"], ["NBSS:0xIMG1", "NBSS:0xIMG2"])
                 self.assertEqual(body["results"][0]["contentCompleteness"], "partial")
                 self.assertEqual(body["results"][0]["observationConfidence"], "medium")
@@ -556,6 +603,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                     "core_view": "",
                     "intent": "",
                     "cognitive_asset": "",
+                    "namespace_id": "user_a",
                     "source_table": "mobile_capture_asset_cards",
                     "md_url": "",
                     "snippet": "一张菜单照片。",
@@ -569,12 +617,13 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 thread.start()
                 host, port = server.server_address
                 with urllib.request.urlopen(
-                    f"http://{host}:{port}/api/v1/mobile/cards/mobile-1?source_table=mobile_capture_asset_cards",
+                    f"http://{host}:{port}/api/v1/mobile/cards/mobile-1?source_table=mobile_capture_asset_cards&namespace_id=user_a",
                     timeout=5,
                 ) as response:
                     body = json.loads(response.read().decode("utf-8"))
                 self.assertTrue(body["ok"])
                 self.assertEqual(body["id"], "mobile-1")
+                self.assertEqual(body["namespaceId"], "user_a")
                 self.assertEqual(body["imageRefs"], ["NBSS:0xIMG1"])
                 self.assertEqual(body["detail"]["meta"]["contentCompleteness"], "partial")
                 self.assertEqual(body["detail"]["blocks"][0]["title"], "这是什么")

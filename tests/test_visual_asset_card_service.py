@@ -12,11 +12,29 @@ from visual_asset_card_service.config import Config
 from visual_asset_card_service.service import (
     ASSET_CARD_SCHEMA,
     VisualAssetCardService,
+    derive_display_title,
     parse_ingest_request,
 )
 
 
 class VisualAssetCardServiceTests(unittest.TestCase):
+    def test_derive_display_title_from_subject_section(self) -> None:
+        body = "# 这是什么\n一张法文宴会菜单。\n\n# 直接可见信息\n可见日期。\n"
+        payload = {
+            "objectHint": "菜单",
+            "groupNote": "",
+            "sourceClient": "android-apk",
+            "images": [
+                {
+                    "contentBase64": base64.b64encode(b"a").decode("ascii"),
+                    "mimeType": "image/jpeg",
+                    "order": 1,
+                }
+            ],
+        }
+        request_data = parse_ingest_request(payload)
+        self.assertEqual(derive_display_title(body, request_data), "法文宴会菜单")
+
     def test_parse_ingest_request_sorts_and_decodes_images(self) -> None:
         payload = {
             "objectHint": "菜单",
@@ -88,6 +106,7 @@ class VisualAssetCardServiceTests(unittest.TestCase):
         self.assertEqual(result["card"]["imageRefs"], ["NBSS:0xA", "NBSS:0xB"])
         self.assertEqual(result["card"]["detail"]["blocks"][0]["title"], "这是什么")
         self.assertEqual(result["card"]["summary"], "名片")
+        self.assertEqual(result["card"]["title"], "名片")
 
     def test_parse_ingest_request_rejects_invalid_base64(self) -> None:
         payload = {

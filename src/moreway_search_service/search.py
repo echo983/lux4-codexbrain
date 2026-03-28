@@ -86,13 +86,49 @@ def _extract_body(text: str) -> str:
     return text[match.end() :].strip() if match else text.strip()
 
 
+def _extract_section_text(text: str, section_title: str) -> str:
+    current_title = ""
+    current_lines: list[str] = []
+    for line in _extract_body(text).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current_title == section_title:
+                return "\n".join(current_lines).strip()
+            current_title = stripped.lstrip("#").strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_title == section_title:
+        return "\n".join(current_lines).strip()
+    return ""
+
+
+def _derive_mobile_display_title(text: str) -> str:
+    subject = _extract_section_text(text, "这是什么")
+    subject = re.sub(r"\s+", " ", subject).strip()
+    if subject:
+        subject = re.split(r"[。！？\n]", subject, maxsplit=1)[0].strip()
+    subject = re.sub(r"^这是一[张份个组]\s*", "", subject)
+    subject = re.sub(r"^一[张份个组]\s*", "", subject)
+    subject = re.sub(r"^某[张份个]\s*", "", subject)
+    subject = re.sub(r"[，,:：；。！？]+$", "", subject).strip()
+    if len(subject) > 32:
+        subject = subject[:32].rstrip()
+    return subject
+
+
 def _extract_title(text: str, metadata: dict[str, Any], frontmatter: dict[str, Any]) -> str:
     for candidate in (
+        str(frontmatter.get("display_title") or "").strip(),
+        str(metadata.get("display_title") or "").strip(),
         str(frontmatter.get("note_title") or "").strip(),
         str(metadata.get("note_title") or "").strip(),
     ):
         if candidate:
             return candidate
+    mobile_title = _derive_mobile_display_title(text)
+    if mobile_title:
+        return mobile_title
     body = _extract_body(text)
     title_match = TITLE_RE.search(body)
     if title_match:

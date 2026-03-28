@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -164,6 +165,50 @@ def _extract_openai_text(response: dict[str, Any]) -> str:
     raise RuntimeError(f"OpenAI response did not contain output_text: {response}")
 
 
+def _extract_section_markdown(markdown_text: str, section_title: str) -> str:
+    current_title = ""
+    current_lines: list[str] = []
+    for line in markdown_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if current_title == section_title:
+                return "\n".join(current_lines).strip()
+            current_title = stripped.lstrip("#").strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_title == section_title:
+        return "\n".join(current_lines).strip()
+    return ""
+
+
+def derive_display_title(body_markdown: str, request_data: IngestRequest) -> str:
+    subject = _extract_section_markdown(body_markdown, "这是什么")
+    if not subject:
+        subject = request_data.object_hint
+    subject = re.sub(r"\s+", " ", subject).strip()
+    if subject:
+        subject = re.split(r"[。！？\n]", subject, maxsplit=1)[0].strip()
+    replacements = [
+        (r"^这是一[张份个组]\s*", ""),
+        (r"^这是一[^，。；：]*?的\s*", ""),
+        (r"^一[张份个组]\s*", ""),
+        (r"^某个\s*", ""),
+        (r"^某份\s*", ""),
+        (r"^某张\s*", ""),
+    ]
+    for pattern, repl in replacements:
+        subject = re.sub(pattern, repl, subject)
+    subject = re.sub(r"[，,:：；。！？]+$", "", subject).strip()
+    if not subject:
+        subject = request_data.object_hint.strip()
+    if not subject:
+        subject = "手机拍照资产卡"
+    if len(subject) > 32:
+        subject = subject[:32].rstrip()
+    return subject
+
+
 def generate_card_body_with_openai(request_data: IngestRequest) -> str:
     api_key, base_url = resolve_openai_config()
     if not api_key:
@@ -193,6 +238,7 @@ def build_card_markdown(
     capture_group_id: str,
     request_data: IngestRequest,
     image_fids: list[str],
+    display_title: str,
     body_markdown: str,
 ) -> str:
     return (
@@ -204,6 +250,7 @@ def build_card_markdown(
         f"capture_group_id: {capture_group_id}\n"
         f"group_image_fids: {json.dumps(image_fids, ensure_ascii=False)}\n"
         f"group_size: {len(image_fids)}\n"
+        f'display_title: "{display_title}"\n'
         f'object_hint: "{request_data.object_hint}"\n'
         f'group_note: "{request_data.group_note}"\n'
         'content_completeness: "partial"\n'
@@ -228,11 +275,13 @@ class VisualAssetCardService:
         capture_group_id = _capture_group_id(image_fids)
         card_id = f"mobile_capture_{uuid.uuid4().hex[:16]}"
         body_markdown = generate_card_body_with_openai(request_data)
+        display_title = derive_display_title(body_markdown, request_data)
         markdown = build_card_markdown(
             card_id=card_id,
             capture_group_id=capture_group_id,
             request_data=request_data,
             image_fids=image_fids,
+            display_title=display_title,
             body_markdown=body_markdown,
         )
         account_id, token, model = resolve_embedding_config()
@@ -244,6 +293,7 @@ class VisualAssetCardService:
             "capture_group_id": capture_group_id,
             "group_image_fids": image_fids,
             "group_size": len(image_fids),
+            "display_title": display_title,
             "object_hint": request_data.object_hint,
             "group_note": request_data.group_note,
             "content_completeness": "partial",
@@ -272,7 +322,7 @@ class VisualAssetCardService:
                 "card_schema": ASSET_CARD_SCHEMA,
                 "source_type": ASSET_SOURCE_TYPE,
                 "source_table": str(response.get("table") or self.config.table),
-                "title": "",
+                "title": display_title,
                 "created_at": "",
                 "tags": [],
                 "group_image_fids": image_fids,

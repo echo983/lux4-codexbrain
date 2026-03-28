@@ -23,9 +23,11 @@
   "cardSchema": "mobile_capture_asset_card_v1",
   "sourceType": "mobile_photo_group",
   "sourceTable": "mobile_capture_asset_cards",
-  "title": "这是什么",
+  "namespaceId": "ns_user_a13f09cd",
+  "title": "某公司联系人名片",
   "summary": "卡片摘要",
   "createdAt": "",
+  "cardCreatedAt": "2026-03-28T18:01:25Z",
   "tags": [],
   "imageRefs": ["NBSS:0x..."],
   "mdUrl": "",
@@ -81,9 +83,11 @@
     "cardSchema": "mobile_capture_asset_card_v1",
     "sourceType": "mobile_photo_group",
     "sourceTable": "mobile_capture_asset_cards",
-    "title": "这是什么",
+    "namespaceId": "ns_user_a13f09cd",
+    "title": "某公司联系人名片",
     "summary": "名片",
     "createdAt": "",
+    "cardCreatedAt": "2026-03-28T18:01:25Z",
     "tags": [],
     "imageRefs": ["NBSS:0xA", "NBSS:0xB"],
     "mdUrl": "",
@@ -120,7 +124,7 @@
 
 ## 接口二：搜索详情接口
 
-`GET /api/v1/mobile/cards/{id}?source_table=...`
+`GET /api/v1/mobile/cards/{id}?source_table=...&namespace_id=...`
 
 这个接口返回的就是同一套 card payload，只是外层带一个：
 
@@ -145,6 +149,7 @@
 - `title`
 - `summary`
 - `imageRefs[0]`
+- `cardCreatedAt`
 - `detail.meta.contentCompleteness`
 
 详情页优先使用：

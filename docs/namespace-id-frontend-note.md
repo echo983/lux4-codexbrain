@@ -4,7 +4,7 @@
 
 目标很简单：
 
-- 用一个可选的 `namespaceId`
+- 用一个明确的 `namespaceId`
 - 标记不同用户 / 不同用途的资产卡内容
 - 不改原始文档模型
 
@@ -18,9 +18,10 @@
 后端已经支持：
 
 1. 写入手机视觉资产卡时接收 `namespaceId`
-2. 搜索接口接收 `namespaceId`
-3. 详情接口接收 `namespace_id`
-4. 搜索结果和详情结果都返回 `namespaceId`
+2. 新资产读服务搜索接口强制要求 `namespaceId`
+3. 新资产读服务详情接口强制要求 `namespace_id`
+4. recent / planet view 也强制要求 namespace
+5. 搜索结果和详情结果都返回 `namespaceId`
 
 ## 前端要改哪些地方
 
@@ -32,7 +33,7 @@
 
 - `POST /api/v1/visual-cards`
 
-新增可选字段：
+新增字段：
 
 ```json
 {
@@ -72,7 +73,11 @@
 
 - `POST /api/v1/mobile/search`
 
-新增可选字段：
+当前建议接入服务：
+
+- `moreway_asset_service`
+
+新增必填字段：
 
 ```json
 {
@@ -143,8 +148,9 @@ GET /api/v1/mobile/cards/mobile_capture_xxx?source_table=mobile_capture_asset_ca
 
 这是最重要的一条：
 
-- 一旦搜索请求带了 `namespaceId`
-- 后端只返回匹配该 `namespaceId` 的资产卡
+- 新的 `moreway_asset_service` 不兼容无 namespace 的用户态读请求
+- `namespaceId` 缺失时会直接返回 `400 missing_namespace_id`
+- 带了 `namespaceId` 后，后端只返回匹配该 `namespaceId` 的资产卡
 - 没有 namespace 的原始文档不会混进来
 
 这样做的目的不是强隔离，而是避免不同用户的内容在资产卡层混淆。
@@ -155,14 +161,14 @@ GET /api/v1/mobile/cards/mobile_capture_xxx?source_table=mobile_capture_asset_ca
 
 也就是说：
 
-- `raw_text` 结果本身不承诺 namespace 语义
-- 当请求明确带了 `namespaceId` 时，搜索结果以有 namespace 的资产卡为主
+- `raw_text` 本身不承诺 namespace 语义
+- 新的 `moreway_asset_service` 面向用户态接口时，实际返回以 namespace-aware 资产卡为主
 
 前端不要尝试给原始文档补 namespace。
 
 ## 前端推荐实现
 
-建议前端统一做一个可选字段：
+建议前端统一做一个字段：
 
 ```ts
 type NamespaceId = string
@@ -176,18 +182,13 @@ type NamespaceId = string
 
 ## 空值规则
 
-`namespaceId` 是可选的。
+在新的 `moreway_asset_service` 上，`namespaceId` 不是可选字段。
 
-如果没有当前 namespace：
+规则：
 
-- 可以不传
-- 或传空字符串
-
-当前更推荐：
-
-- 不传
-
-这样最干净。
+- 没有当前 namespace，就不要调用用户态资产读接口
+- 不要传空字符串
+- 不要依赖后端兜底成“全局搜索”
 
 ## 命名规范建议
 
@@ -259,6 +260,8 @@ ns_user_<sha1(stable_user_id)[:8]>
 
 - 写入传 `namespaceId`
 - 搜索传 `namespaceId`
+- recent 传 `namespace_id`
 - 详情传 `namespace_id`
+- planet view 传 `namespace_id`
 
 就可以把不同用户 / 不同用途的资产卡内容标记并筛开。

@@ -15,6 +15,10 @@
 
 `GET /api/v1/mobile/cards/recent`
 
+当前建议接入：
+
+- `moreway_asset_service`
+
 ## Query Parameters
 
 - `namespace_id`: 必填
@@ -39,6 +43,7 @@
 
 - 没有 `card_created_at` 的旧卡不会进入 recent feed
 - 这意味着 recent 页面天然更适合展示新写入的手机视觉资产卡
+- 这是 namespace-aware 用户视图接口，不兼容旧的无 namespace 调用
 
 ## Response Shape
 
@@ -111,6 +116,7 @@
 
 - 列表页可以直接复用现有移动搜索结果卡片 UI
 - recent item 的 `score` 当前为 `null`，前端不要依赖它
+- 推荐把 `namespaceId` 作为当前页面上下文持有，不要在各个页面临时拼接不同值
 - 推荐展示：
   - `title`
   - `summary`

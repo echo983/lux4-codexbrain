@@ -12,6 +12,7 @@
 - 让前端把“同一现实对象”的 1 到 N 张图片作为一次请求提交
 - 由后端生成一张对象级资产卡
 - 后端将图片写入 NBSS，将资产卡写入 LanceDB
+- 写入成功后直接返回统一 `card` detail payload，前端可直接展示
 
 ## Scope
 
@@ -116,6 +117,7 @@ v1 不支持：
 成功后至少保存：
 
 - `cardId`
+- `namespaceId`
 - `captureGroupId`
 - `groupImageFids`
 
@@ -138,6 +140,7 @@ Content-Type: application/json
   "objectHint": "菜单",
   "groupNote": "正面两张，反面一张",
   "sourceClient": "android-apk",
+  "namespaceId": "ns_user_a13f09cd",
   "images": [
     {
       "contentBase64": "<base64>",
@@ -186,6 +189,16 @@ Content-Type: application/json
 建议值：
 
 - `android-apk`
+
+##### `namespaceId`
+
+- type: `string`
+- optional but recommended
+
+说明：
+
+- 这是资产卡的逻辑 namespace
+- 后续 search / recent / detail / planet view 都会依赖它做用户视图过滤
 
 ##### `images`
 
@@ -238,12 +251,51 @@ Response body:
   "cardId": "mobile_capture_a32d1a0235224dcf",
   "cardSchema": "mobile_capture_asset_card_v1",
   "status": "written",
+  "namespaceId": "ns_user_a13f09cd",
   "captureGroupId": "cg_ecdc7ea1d53ce0c2",
   "groupImageFids": [
     "NBSS:0xB14623759A454DBD"
   ],
   "rowsWritten": 1,
-  "table": "mobile_capture_asset_cards"
+  "table": "mobile_capture_asset_cards",
+  "cardCreatedAt": "2026-03-28T18:01:25Z",
+  "card": {
+    "id": "mobile_capture_a32d1a0235224dcf",
+    "docKind": "asset_card",
+    "cardSchema": "mobile_capture_asset_card_v1",
+    "sourceType": "mobile_photo_group",
+    "sourceTable": "mobile_capture_asset_cards",
+    "namespaceId": "ns_user_a13f09cd",
+    "title": "某餐厅菜单照片",
+    "summary": "菜单内容摘要",
+    "createdAt": "",
+    "cardCreatedAt": "2026-03-28T18:01:25Z",
+    "tags": [],
+    "imageRefs": ["NBSS:0xB14623759A454DBD"],
+    "mdUrl": "",
+    "markdown": "...",
+    "detail": {
+      "schemaVersion": "mobile_capture_asset_card_v1",
+      "highlights": {
+        "coreView": "",
+        "intent": "",
+        "cognitiveAsset": ""
+      },
+      "meta": {
+        "contentCompleteness": "partial",
+        "observationConfidence": "medium",
+        "categoryPath": "",
+        "priority": ""
+      },
+      "blocks": [
+        {
+          "type": "section",
+          "title": "这是什么",
+          "markdown": "..."
+        }
+      ]
+    }
+  }
 }
 ```
 
@@ -255,10 +307,17 @@ Response body:
   - 当前固定为 `mobile_capture_asset_card_v1`
 - `status`
   - 当前固定为 `written`
+- `namespaceId`
+  - 本次写入资产卡的 namespace
 - `captureGroupId`
   - 服务端为本次请求生成的组标识
 - `groupImageFids`
-  - 图片写入 NBSS 后返回的引用
+  - 写入 NBSS 后返回的图片 FID 列表
+- `cardCreatedAt`
+  - 后端生成的稳定卡片创建时间
+- `card`
+  - 与移动详情接口统一的详情 payload
+  - 写入成功后前端可直接消费，不必立刻二次请求详情
 - `rowsWritten`
   - LanceDB 写入条数
 - `table`

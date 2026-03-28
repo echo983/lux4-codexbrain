@@ -51,6 +51,9 @@
   - [mobile-capture-frontend-api.md](/root/lux4-codexbrain/docs/mobile-capture-frontend-api.md)
 - 已完成手机端 Moreway Search 接口规范：
   - [mobile-moreway-search-api.md](/root/lux4-codexbrain/docs/mobile-moreway-search-api.md)
+- 已完成新的 namespace-aware 资产读服务骨架与接口：
+  - [moreway_asset_service](/root/lux4-codexbrain/src/moreway_asset_service/__main__.py)
+  - [moreway-asset-service-plan.md](/root/lux4-codexbrain/docs/moreway-asset-service-plan.md)
 - 已实现手机视觉资产卡写入服务骨架：
   - `POST /api/v1/visual-cards`
   - `GET /healthz`
@@ -973,7 +976,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 ## moreway Search Service
 
-仓库现在还包含一个独立的 Google Keep 在线搜索子项目：
+仓库仍然保留旧的搜索服务：
 
 - [moreway_search_service](/root/lux4-codexbrain/src/moreway_search_service/__main__.py)
 
@@ -984,6 +987,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 - 支持分页
 - 支持标签过滤
 - 资产卡与原始文档可区分展示
+- 兼容旧的 Web 与内部调用链
 
 启动：
 
@@ -1011,6 +1015,11 @@ PYTHONPATH=src python3 -m moreway_search_service
 
 - [mobile-moreway-search-api.md](/root/lux4-codexbrain/docs/mobile-moreway-search-api.md)
 
+说明：
+
+- 这是旧的兼容读服务。
+- 新的 namespace-aware 用户态读接口，优先看下面的 `moreway_asset_service`。
+
 可通过环境变量覆盖：
 
 - `MOREWAY_HOST`
@@ -1022,6 +1031,54 @@ PYTHONPATH=src python3 -m moreway_search_service
 
 ---
 
+## moreway Asset Service
+
+仓库现在还包含一个新的资产读服务：
+
+- [moreway_asset_service](/root/lux4-codexbrain/src/moreway_asset_service/__main__.py)
+
+用途：
+
+- 面向移动端和未来新渲染界面的 namespace-aware 资产读取
+- 提供统一的：
+  - mobile search
+  - recent cards
+  - card detail
+  - planet view
+
+当前接口：
+
+- `GET /healthz`
+- `POST /api/v1/mobile/search`
+- `GET /api/v1/mobile/cards/{id}`
+- `GET /api/v1/mobile/cards/recent`
+- `GET /api/v1/planet/view`
+
+当前规则：
+
+- 这是新的用户态资产读服务
+- `namespace_id` / `namespaceId` 是强制要求，不做旧调用兼容
+- `planet view` 已经返回真实 namespace-aware 点位数据
+
+启动：
+
+```bash
+cd /root/lux4-codexbrain
+PYTHONPATH=src python3 -m moreway_asset_service
+```
+
+默认监听：
+
+- `http://127.0.0.1:18562/`
+
+对应文档：
+
+- [mobile-moreway-search-api.md](/root/lux4-codexbrain/docs/mobile-moreway-search-api.md)
+- [mobile-recent-cards-api.md](/root/lux4-codexbrain/docs/mobile-recent-cards-api.md)
+- [moreway-asset-service-plan.md](/root/lux4-codexbrain/docs/moreway-asset-service-plan.md)
+
+---
+
 ## Daemon Manager TUI
 
 仓库现在包含一个基于 `ratatui` 的终端管理器，用来查看和控制当前几个 Python daemon：
@@ -1029,6 +1086,11 @@ PYTHONPATH=src python3 -m moreway_search_service
 - `lux4_daemon`
 - `moreway_search_service`
 - `visual_asset_card_service`
+
+说明：
+
+- 当前 TUI 还没有纳入 `moreway_asset_service`
+- 也没有纳入 `Moreway Planet` 的 Vite dev server
 
 运行：
 
@@ -1093,6 +1155,19 @@ scripts/run_moreway_planet_dev.sh
 
 - `MOREWAY_PLANET_HOST`
 - `MOREWAY_PLANET_PORT`
+
+说明：
+
+- 现有 Web 星球仍然消费旧的静态 dataset 构建链
+- dataset 现已纳入：
+  - `google_keep_asset_cards_directmd_eval200`
+  - `mobile_capture_asset_cards`
+- dataset payload 现已带：
+  - `namespace_id`
+  - `card_created_at`
+- 前端可通过 URL 参数按 namespace 过滤：
+  - `http://127.0.0.1:18571/?namespaceId=ns_user_a13f09cd`
+- 未来新的渲染界面应优先考虑直接消费 `moreway_asset_service` 的 `planet view` 数据接口
 
 如果你想后台管理现有 Vite 进程，仓库里也保留了：
 

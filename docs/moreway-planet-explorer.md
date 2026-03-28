@@ -2,6 +2,11 @@
 
 `moreway_planet_explorer` 是一个新的子项目，用于把 LanceDB 中的文档映射到浏览器中的可交互虚拟星球上，供用户探索式发现。
 
+当前需要明确两条并行现实：
+
+- 现有 Web 星球继续消费离线构建的静态 dataset
+- 未来新的渲染界面应优先考虑直接消费 `moreway_asset_service` 的 namespace-aware `planet view` 接口
+
 ## 目标
 
 - 在浏览器中提供一个可旋转、缩放、探索的星球界面。
@@ -12,9 +17,9 @@
 
 ## 第一版设计取舍
 
-第一版遵循这几个明确原则：
+当前静态 dataset 版遵循这几个明确原则：
 
-- 默认收录所有非 `_smoke` LanceDB 表。
+- 默认通过构建脚本选择目标 LanceDB 表。
 - 默认保留 UMAP 的 3D 空间关系，再映射到球壳表面，不把点直接粗暴压扁到球皮。
 - 默认以前端视角触发分块加载，而不是一次性把全部点送到浏览器。
 - cron 第一版做“变更检测 + 必要时全量重建”，不宣称已经实现真正的在线增量 UMAP。
@@ -118,8 +123,13 @@
 - `source_type`
 - `card_schema`
 - `created_at`
+- `card_created_at`
+- `namespace_id`
 - `path_in_snapshot`
 - `keep_md_fid`
+- `group_image_fids`
+- `content_completeness`
+- `observation_confidence`
 - `surface_x`
 - `surface_y`
 - `surface_z`
@@ -167,3 +177,21 @@ cron 入口：
 - 数据可加载
 - 文档可探索
 - 构建链路可持续重建
+
+## 当前补充说明
+
+当前静态 dataset 已经纳入：
+
+- `google_keep_asset_cards_directmd_eval200`
+- `mobile_capture_asset_cards`
+
+这意味着：
+
+- Web 星球已经可以显示手机视觉资产卡
+- 也可以按 `?namespaceId=...` 在前端层过滤点
+
+但要注意：
+
+- 这是旧 Web 星球的过渡方案
+- 新的 namespace-aware `planet view` 数据接口已经在 `moreway_asset_service` 中实现
+- 未来新的 Web/Android 渲染界面应优先复用那个读接口

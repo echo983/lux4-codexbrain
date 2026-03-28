@@ -6,6 +6,11 @@
 - 不同类型应该怎么处理
 - `deep_asset_card_v1` 该怎么按当前规则解析
 
+当前默认语境：
+
+- 用户态移动搜索接口优先来自 `moreway_asset_service`
+- 请求必须带当前 `namespaceId`
+
 ## 一、先看哪几个字段
 
 移动端搜索结果里，前端先看这 3 个字段：
@@ -206,6 +211,7 @@
   - `title`
   - `summary`
   - `imageRefs`
+  - `cardCreatedAt`
   - `detail.blocks`
   - 必要时展示 `markdown`
 
@@ -255,3 +261,7 @@ if (docKind !== "asset_card") {
 - `raw_text`：直接展示，不解析
 - `deep_asset_card_v1`：优先按 `核心观点 / 意图识别 / 认知资产` 这 3 个字段展示
 - `mobile_capture_asset_card_v1`：按当前统一 detail payload 展示，不用改
+
+补充：
+
+- 所有新的用户态读请求都应带上当前 `namespaceId`

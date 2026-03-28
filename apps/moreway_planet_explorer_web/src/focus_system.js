@@ -12,6 +12,7 @@ export function createFocusSystem({
   planet,
   basePointSize,
   getSelectedPayload,
+  matchesPayload,
   onResultsChanged,
 }) {
   let focusResults = [];
@@ -162,6 +163,7 @@ export function createFocusSystem({
 
         const payload = payloads[index];
         if (!payload) continue;
+        if (typeof matchesPayload === 'function' && !matchesPayload(payload)) continue;
 
         const distance = center.distanceTo(new THREE.Vector2(projected.x, projected.y));
         const key = payload.keep_md_fid || payload.doc_id || payload.path_in_snapshot || payload.title;

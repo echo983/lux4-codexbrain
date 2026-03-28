@@ -15,6 +15,7 @@ test('results panel renders empty state', () => {
   const panel = createResultsPanel({
     resultsSummaryEl,
     resultsListEl,
+    activeNamespaceId: '',
     inferDocKind: () => 'raw_text',
     compactMetaLabel: () => 'keep260323',
     nbssObjectUrl: () => '',
@@ -34,6 +35,7 @@ test('results panel hydrates and renders asset card summary fields', async () =>
   const panel = createResultsPanel({
     resultsSummaryEl,
     resultsListEl,
+    activeNamespaceId: '',
     inferDocKind: () => 'asset_card',
     compactMetaLabel: () => 'keep260323',
     nbssObjectUrl: () => 'http://example/raw.md',
@@ -66,4 +68,49 @@ test('results panel hydrates and renders asset card summary fields', async () =>
   assert.match(resultsListEl.innerHTML, /核心观点/);
   assert.match(resultsListEl.innerHTML, /意图识别/);
   assert.match(resultsListEl.innerHTML, /认知资产/);
+});
+
+test('results panel renders mobile capture asset cards without keep markdown fetch', async () => {
+  const { resultsSummaryEl, resultsListEl } = makeElements();
+  let loadCalls = 0;
+  const panel = createResultsPanel({
+    resultsSummaryEl,
+    resultsListEl,
+    activeNamespaceId: 'ns_lab_4ac91e20',
+    inferDocKind: () => 'asset_card',
+    compactMetaLabel: () => 'mobile260328',
+    nbssObjectUrl: () => '',
+    assetCardUrl: () => '',
+    getSelectedPayload: () => null,
+    loadText: async () => {
+      loadCalls += 1;
+      return '';
+    },
+  });
+
+  const focusResults = [
+    {
+      distance: 0.08,
+      payload: {
+        doc_id: 'mobile_capture_1',
+        card_schema: 'mobile_capture_asset_card_v1',
+        title: '检验报告领取说明',
+        summary: '西班牙巴塞罗那实验室的检验结果领取与线上查询说明。',
+        content_completeness: 'partial',
+        observation_confidence: 'medium',
+        text_preview: '',
+      },
+    },
+  ];
+
+  panel.renderFocusResults(focusResults);
+  await panel.hydrateFocusResultsContent(focusResults, (force) => panel.renderFocusResults(focusResults, force));
+
+  assert.equal(loadCalls, 0);
+  assert.match(resultsSummaryEl.textContent, /namespace=ns_lab_4ac91e20/);
+  assert.match(resultsSummaryEl.textContent, /1 条/);
+  assert.match(resultsListEl.innerHTML, /检验报告领取说明/);
+  assert.match(resultsListEl.innerHTML, /巴塞罗那实验室/);
+  assert.match(resultsListEl.innerHTML, /完整度：partial/);
+  assert.match(resultsListEl.innerHTML, /观察置信度：medium/);
 });

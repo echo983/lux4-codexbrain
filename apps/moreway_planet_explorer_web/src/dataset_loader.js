@@ -74,16 +74,27 @@ export async function ensureVisibleChunks({
   pointRadius,
   basePointSize,
   starTexture,
+  rowFilter,
   setStatus,
 }) {
   for (const chunk of visibleChunks(manifest, camera)) {
     if (loadedChunks.has(chunk.chunk_id)) continue;
     const table = await loadArrow(`${dataSetBase}/builds/${manifest.build_id}/${chunk.path}`);
-    const rows = table.toArray().map((row) => row.toJSON());
+    const rows = table
+      .toArray()
+      .map((row) => row.toJSON())
+      .filter((row) => (typeof rowFilter === 'function' ? rowFilter(row) : true));
+    if (!rows.length) {
+      loadedChunks.set(chunk.chunk_id, { rows: [], mesh: null });
+      continue;
+    }
     const mesh = buildChunkPoints(rows, pointRadius, basePointSize, starTexture);
     scene.add(mesh);
     loadedChunks.set(chunk.chunk_id, { rows, mesh });
     pointMeshes.push(mesh);
   }
-  setStatus(`Build ${manifest.build_id} · ${loadedChunks.size}/${manifest.chunks.length} chunks loaded · ${manifest.document_count} docs`);
+  const docCount = typeof rowFilter === 'function'
+    ? Array.from(loadedChunks.values()).reduce((sum, entry) => sum + (entry.rows?.length || 0), 0)
+    : manifest.document_count;
+  setStatus(`Build ${manifest.build_id} · ${loadedChunks.size}/${manifest.chunks.length} chunks loaded · ${docCount} docs`);
 }

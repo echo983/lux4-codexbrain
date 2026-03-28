@@ -6,7 +6,9 @@ import {
   compactMetaLabel,
   inferDocKind,
   loadText,
+  matchesNamespaceFilter,
   nbssObjectUrl,
+  readPlanetUrlState,
 } from './content_runtime.js';
 import {
   ensureVisibleChunks,
@@ -31,6 +33,7 @@ import {
 } from './planet_surface.js';
 
 const statusEl = document.getElementById('status');
+const namespaceBadgeEl = document.getElementById('namespace-badge');
 const sceneRoot = document.getElementById('scene-root');
 const overlayLayerEl = document.getElementById('overlay-layer');
 const focusRegionBoxEl = document.getElementById('focus-region-box');
@@ -99,10 +102,18 @@ let pointMeshes = [];
 let selectedPayload = null;
 const starTexture = buildStarTexture();
 const textureLoader = new THREE.TextureLoader();
+const { namespaceId: activeNamespaceId } = readPlanetUrlState();
+
+if (namespaceBadgeEl) {
+  namespaceBadgeEl.textContent = activeNamespaceId
+    ? `Namespace: ${activeNamespaceId}`
+    : 'Namespace: all';
+}
 
 const resultsPanel = createResultsPanel({
   resultsSummaryEl: document.getElementById('results-summary'),
   resultsListEl: document.getElementById('results-list'),
+  activeNamespaceId,
   inferDocKind,
   compactMetaLabel,
   nbssObjectUrl,
@@ -134,6 +145,7 @@ const focusSystem = createFocusSystem({
   planet,
   basePointSize: BASE_POINT_SIZE,
   getSelectedPayload: () => selectedPayload,
+  matchesPayload: (payload) => matchesNamespaceFilter(payload, activeNamespaceId),
   onResultsChanged: () => {
     const results = focusSystem.getFocusResults();
     resultsPanel.renderFocusResults(results);
@@ -164,9 +176,11 @@ async function bootstrap() {
     if (manifest.planet?.surface_map) {
       applyPlanetSurfaceRelief(planet, planetBasePositions, manifest.planet.surface_map);
     }
-    
+
     await materialRuntime.initialize();
-    
+    if (statusEl && activeNamespaceId) {
+      statusEl.textContent = `正在加载... namespace=${activeNamespaceId}`;
+    }
     setSelection(null);
     focusSystem.updateFocusResults();
   } catch (error) {
@@ -191,6 +205,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     const worldPoint = hit.point.clone();
     if (!focusSystem.isWorldPointVisible(worldPoint)) continue;
     payload = hit.object.userData.payloads?.[index] || null;
+    if (payload && !matchesNamespaceFilter(payload, activeNamespaceId)) {
+      payload = null;
+      continue;
+    }
     if (payload) break;
   }
   setSelection(payload || null);
@@ -231,6 +249,7 @@ function animate(now = 0) {
       pointRadius,
       basePointSize: BASE_POINT_SIZE,
       starTexture,
+      rowFilter: (row) => matchesNamespaceFilter(row, activeNamespaceId),
       setStatus: (text) => { if (statusEl) statusEl.textContent = text; },
     });
   }

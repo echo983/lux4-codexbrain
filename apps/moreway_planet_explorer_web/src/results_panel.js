@@ -1,6 +1,7 @@
 export function createResultsPanel({
   resultsSummaryEl,
   resultsListEl,
+  activeNamespaceId = '',
   inferDocKind,
   compactMetaLabel,
   nbssObjectUrl,
@@ -54,6 +55,24 @@ export function createResultsPanel({
     return { coreView, intent, cognitiveAsset, preview };
   }
 
+  function parseMobileAssetCardSummary(payload, fallbackPreview = '') {
+    const preview = compactLines(
+      payload.summary || payload.text_preview || fallbackPreview || '',
+      5,
+    );
+    const metaLines = [
+      payload.content_completeness ? `完整度：${payload.content_completeness}` : '',
+      payload.observation_confidence ? `观察置信度：${payload.observation_confidence}` : '',
+    ].filter(Boolean);
+    return {
+      coreView: '',
+      intent: '',
+      cognitiveAsset: '',
+      preview,
+      metaLines,
+    };
+  }
+
   function parseRawMarkdownPreview(text) {
     const raw = String(text || '');
     const lines = raw.split(/\r?\n/);
@@ -68,6 +87,10 @@ export function createResultsPanel({
       const key = payload.keep_md_fid || payload.doc_id || payload.path_in_snapshot || payload.title;
       if (!key || resultContentCache.has(key)) return;
       if (inferDocKind(payload) === 'asset_card') {
+        if (payload.card_schema && payload.card_schema !== 'deep_asset_card_v1') {
+          resultContentCache.set(key, parseMobileAssetCardSummary(payload, payload.text_preview || ''));
+          return;
+        }
         const url = assetCardUrl(payload);
         if (!url) {
           resultContentCache.set(key, parseAssetCardSummary('', payload.text_preview || ''));
@@ -114,12 +137,16 @@ export function createResultsPanel({
 
   function renderFocusResults(focusResults, force = false) {
     if (!focusResults.length) {
-      resultsSummaryEl.textContent = '当前视锥中心附近暂无可见文档。';
+      resultsSummaryEl.textContent = activeNamespaceId
+        ? `当前视锥中心附近暂无 namespace=${activeNamespaceId} 的可见文档。`
+        : '当前视锥中心附近暂无可见文档。';
       resultsListEl.innerHTML = '<div class="results-empty">转动或缩放星球，列表会按视觉中心实时更新。</div>';
       return;
     }
 
-    resultsSummaryEl.textContent = `视觉中心附近文档 ${focusResults.length} 条，按屏幕中心距离排序。`;
+    resultsSummaryEl.textContent = activeNamespaceId
+      ? `视觉中心附近 namespace=${activeNamespaceId} 文档 ${focusResults.length} 条，按屏幕中心距离排序。`
+      : `视觉中心附近文档 ${focusResults.length} 条，按屏幕中心距离排序。`;
     const selectedPayload = getSelectedPayload();
     resultsListEl.innerHTML = focusResults.map((entry, idx) => {
       const payload = entry.payload;
@@ -141,6 +168,7 @@ export function createResultsPanel({
           ${cached?.coreView ? `<div class="result-asset-line"><div class="result-asset-key">核心观点</div><div class="result-asset-value">${formatContent(cached.coreView)}</div></div>` : ''}
           ${cached?.intent ? `<div class="result-asset-line"><div class="result-asset-key">意图识别</div><div class="result-asset-value">${formatContent(cached.intent)}</div></div>` : ''}
           ${cached?.cognitiveAsset ? `<div class="result-asset-line"><div class="result-asset-key">认知资产</div><div class="result-asset-value">${formatContent(cached.cognitiveAsset)}</div></div>` : ''}
+          ${(cached?.metaLines || []).map((line) => `<div class="result-asset-line"><div class="result-asset-key">卡片信息</div><div class="result-asset-value">${escapeHtml(line)}</div></div>`).join('')}
         </div>
       ` : '';
       const links = `
@@ -160,7 +188,7 @@ export function createResultsPanel({
             ${links}
           </div>
           ${assetLines}
-          ${!isAssetCard ? `<p class="result-preview">${escapeHtml(preview)}</p>` : ''}
+          ${(!isAssetCard || preview) ? `<p class="result-preview">${escapeHtml(preview)}</p>` : ''}
         </article>
       `;
     }).join('');

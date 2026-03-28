@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,7 @@ class SearchHit:
     source_type: str
     card_schema: str
     created_at: str
+    card_created_at: str
     tags: list[str]
     category_path: str
     priority: str
@@ -208,6 +210,30 @@ def _extract_namespace_id(metadata: dict[str, Any], frontmatter: dict[str, Any])
     return str(metadata.get("namespace_id") or frontmatter.get("namespace_id") or "").strip()
 
 
+def _extract_card_created_at(metadata: dict[str, Any], frontmatter: dict[str, Any]) -> str:
+    return str(metadata.get("card_created_at") or frontmatter.get("card_created_at") or "").strip()
+
+
+def _encode_recent_cursor(card_created_at: str, item_id: str, source_table: str) -> str:
+    raw = json.dumps({"card_created_at": card_created_at, "id": item_id, "source_table": source_table}, ensure_ascii=False).encode("utf-8")
+    return urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_recent_cursor(cursor: str) -> tuple[str, str, str]:
+    padded = cursor + "=" * (-len(cursor) % 4)
+    try:
+        decoded = urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+    except Exception as exc:
+        raise ValueError("invalid cursor") from exc
+    card_created_at = str(payload.get("card_created_at") or "").strip()
+    item_id = str(payload.get("id") or "").strip()
+    source_table = str(payload.get("source_table") or "").strip()
+    if not card_created_at or not item_id:
+        raise ValueError("invalid cursor")
+    return card_created_at, item_id, source_table
+
+
 def search_keep_cards(
     query: str,
     *,
@@ -319,6 +345,7 @@ def search_keep_cards(
                     source_type=str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
                     card_schema=str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
                     created_at=str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
+                    card_created_at=_extract_card_created_at(metadata, frontmatter),
                     tags=candidate["tags"],
                     category_path=str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
                     priority=str(metadata.get("priority") or frontmatter.get("priority") or ""),
@@ -401,6 +428,7 @@ def search_keep_cards(
                 "source_type": hit.source_type,
                 "card_schema": hit.card_schema,
                 "created_at": hit.created_at,
+                "card_created_at": hit.card_created_at,
                 "tags": hit.tags,
                 "category_path": hit.category_path,
                 "priority": hit.priority,
@@ -471,6 +499,7 @@ def fetch_card_by_id(
                 "source_type": str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
                 "card_schema": str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
                 "created_at": str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
+                "card_created_at": _extract_card_created_at(metadata, frontmatter),
                 "tags": _coerce_tags(frontmatter, metadata),
                 "category_path": str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
                 "priority": str(metadata.get("priority") or frontmatter.get("priority") or ""),
@@ -498,3 +527,111 @@ def fetch_card_by_id(
                 "namespace_id": item_namespace_id,
             }
     return None
+
+
+def list_recent_cards(
+    *,
+    tables: list[str],
+    namespace_id: str,
+    limit: int,
+    cursor: str = "",
+    doc_kind: str = "asset_card",
+    source_table: str = "",
+    scan_limit: int = 100,
+) -> dict[str, Any]:
+    if not namespace_id.strip():
+        raise ValueError("missing namespace_id")
+    normalized_doc_kind = doc_kind.strip() or "asset_card"
+    if normalized_doc_kind != "asset_card":
+        raise ValueError("unsupported doc_kind")
+    cursor_key: tuple[str, str, str] | None = None
+    if cursor.strip():
+        cursor_key = _decode_recent_cursor(cursor.strip())
+
+    candidate_tables = [source_table.strip()] if source_table.strip() else list(tables)
+    fallback_tables = [table for table in tables if table not in candidate_tables]
+    ordered_tables = candidate_tables + fallback_tables
+    zero_vector = [0.0] * ZERO_VECTOR_DIM
+    items: list[dict[str, Any]] = []
+    effective_scan_limit = max(1, min(scan_limit, 100))
+
+    for table in ordered_tables:
+        search_response = post_json(
+            f"{resolve_lancedb_url()}/search",
+            {
+                "table": table,
+                "query_vector": zero_vector,
+                "limit": effective_scan_limit,
+            },
+        )
+        for item in list(search_response.get("results") or []):
+            raw_id = str(item.get("id") or "").strip()
+            if not raw_id:
+                continue
+            text = str(item.get("text", ""))
+            metadata = dict(item.get("metadata") or {})
+            frontmatter = _parse_frontmatter(text)
+            item_doc_kind = _normalize_doc_kind(raw_id, metadata, frontmatter)
+            if item_doc_kind != normalized_doc_kind:
+                continue
+            item_namespace_id = _extract_namespace_id(metadata, frontmatter)
+            if item_namespace_id != namespace_id:
+                continue
+            card_created_at = _extract_card_created_at(metadata, frontmatter)
+            if not card_created_at:
+                continue
+            sort_key = (card_created_at, raw_id, table)
+            if cursor_key is not None and sort_key >= cursor_key:
+                continue
+            core_view, intent, cognitive_asset = _extract_card_fields(text)
+            items.append(
+                {
+                    "id": raw_id,
+                    "title": _extract_title(text, metadata, frontmatter),
+                    "note_title": str(metadata.get("note_title") or ""),
+                    "path_in_snapshot": str(metadata.get("path_in_snapshot") or ""),
+                    "snippet": _build_snippet(text),
+                    "rerank_score": None,
+                    "distance": float(item.get("_distance", 0.0)) if item.get("_distance") is not None else None,
+                    "source_table": table,
+                    "doc_kind": item_doc_kind,
+                    "source_type": str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
+                    "card_schema": str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
+                    "created_at": str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
+                    "card_created_at": card_created_at,
+                    "tags": _coerce_tags(frontmatter, metadata),
+                    "category_path": str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
+                    "priority": str(metadata.get("priority") or frontmatter.get("priority") or ""),
+                    "keep_md_fid": str(metadata.get("keep_md_fid") or ""),
+                    "md_url": nbss_object_url(str(metadata.get("keep_md_fid") or ""), server_endpoint=resolve_nbss_server_endpoint())
+                    if str(metadata.get("keep_md_fid") or "").strip()
+                    else "",
+                    "keep_json_fid": str(metadata.get("keep_json_fid") or ""),
+                    "core_view": core_view,
+                    "intent": intent,
+                    "cognitive_asset": cognitive_asset,
+                    "group_image_fids": _coerce_string_list(metadata.get("group_image_fids"), frontmatter.get("group_image_fids")),
+                    "content_completeness": str(metadata.get("content_completeness") or frontmatter.get("content_completeness") or ""),
+                    "observation_confidence": str(metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""),
+                    "namespace_id": item_namespace_id,
+                }
+            )
+
+    items.sort(key=lambda item: (str(item.get("card_created_at") or ""), str(item.get("id") or ""), str(item.get("source_table") or "")), reverse=True)
+    sliced = items[: max(1, min(limit, 50))]
+    has_more = len(items) > len(sliced)
+    next_cursor = ""
+    if has_more and sliced:
+        last = sliced[-1]
+        next_cursor = _encode_recent_cursor(
+            str(last.get("card_created_at") or ""),
+            str(last.get("id") or ""),
+            str(last.get("source_table") or ""),
+        )
+    return {
+        "namespace_id": namespace_id,
+        "items": sliced,
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+        "limit": max(1, min(limit, 50)),
+    }

@@ -8,10 +8,56 @@ from unittest import mock
 
 from moreway_search_service.http import build_server
 from moreway_search_service.config import Config
-from moreway_search_service.search import search_keep_cards
+from moreway_search_service.search import list_recent_cards, search_keep_cards
 
 
 class MorewaySearchServiceTests(unittest.TestCase):
+    def test_list_recent_cards_sorts_by_card_created_at_desc(self) -> None:
+        newer = {
+            "id": "mobile-2",
+            "text": "---\ndoc_kind: asset_card\nsource_type: mobile_photo_group\ncard_schema: mobile_capture_asset_card_v1\nnamespace_id: user_a\ncard_created_at: 2026-03-28T10:11:12Z\ndisplay_title: 新卡\n---\n\n# 这是什么\n一张新卡",
+            "metadata": {
+                "doc_kind": "asset_card",
+                "source_type": "mobile_photo_group",
+                "card_schema": "mobile_capture_asset_card_v1",
+                "namespace_id": "user_a",
+                "card_created_at": "2026-03-28T10:11:12Z",
+                "display_title": "新卡",
+            },
+            "_distance": 0.1,
+        }
+        older = {
+            "id": "mobile-1",
+            "text": "---\ndoc_kind: asset_card\nsource_type: mobile_photo_group\ncard_schema: mobile_capture_asset_card_v1\nnamespace_id: user_a\ncard_created_at: 2026-03-27T10:11:12Z\ndisplay_title: 旧卡\n---\n\n# 这是什么\n一张旧卡",
+            "metadata": {
+                "doc_kind": "asset_card",
+                "source_type": "mobile_photo_group",
+                "card_schema": "mobile_capture_asset_card_v1",
+                "namespace_id": "user_a",
+                "card_created_at": "2026-03-27T10:11:12Z",
+                "display_title": "旧卡",
+            },
+            "_distance": 0.2,
+        }
+        with mock.patch("moreway_search_service.search.post_json", return_value={"results": [older, newer]}):
+            result = list_recent_cards(
+                tables=["mobile_capture_asset_cards"],
+                namespace_id="user_a",
+                limit=20,
+            )
+        self.assertEqual([item["id"] for item in result["items"]], ["mobile-2", "mobile-1"])
+        self.assertEqual(result["items"][0]["title"], "新卡")
+        self.assertFalse(result["has_more"])
+
+    def test_list_recent_cards_rejects_invalid_cursor(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid cursor"):
+            list_recent_cards(
+                tables=["mobile_capture_asset_cards"],
+                namespace_id="user_a",
+                limit=20,
+                cursor="not-a-valid-cursor",
+            )
+
     def test_search_filters_by_keep_labels(self) -> None:
         with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
             with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
@@ -661,6 +707,94 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 self.assertEqual(body["detail"]["meta"]["contentCompleteness"], "partial")
                 self.assertEqual(body["detail"]["blocks"][0]["title"], "这是什么")
                 self.assertEqual(body["summary"], "一张菜单照片。")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_recent_cards_returns_recent_feed(self) -> None:
+        config = Config(host="127.0.0.1", port=0, tables=["mobile"], vector_limit=20, per_page=20, min_score=0.4, asset_card_dir=Path("."))
+        server = build_server(config)
+        try:
+            with mock.patch(
+                "moreway_search_service.http.list_recent_cards",
+                return_value={
+                    "namespace_id": "user_a",
+                    "items": [
+                        {
+                            "id": "mobile-1",
+                            "title": "新卡",
+                            "path_in_snapshot": "",
+                            "snippet": "一张新卡。",
+                            "rerank_score": None,
+                            "created_at": "",
+                            "card_created_at": "2026-03-28T10:11:12Z",
+                            "tags": [],
+                            "keep_md_fid": "",
+                            "keep_json_fid": "",
+                            "note_title": "",
+                            "distance": 0.1,
+                            "source_table": "mobile_capture_asset_cards",
+                            "doc_kind": "asset_card",
+                            "source_type": "mobile_photo_group",
+                            "card_schema": "mobile_capture_asset_card_v1",
+                            "category_path": "",
+                            "core_view": "",
+                            "intent": "",
+                            "cognitive_asset": "",
+                            "group_image_fids": ["NBSS:0xIMG1"],
+                            "content_completeness": "partial",
+                            "observation_confidence": "medium",
+                            "namespace_id": "user_a",
+                            "md_url": "",
+                        }
+                    ],
+                    "next_cursor": "opaque-cursor",
+                    "has_more": True,
+                    "limit": 20,
+                },
+            ):
+                import threading
+                import urllib.request
+
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                host, port = server.server_address
+                with urllib.request.urlopen(
+                    f"http://{host}:{port}/api/v1/mobile/cards/recent?namespace_id=user_a&limit=20",
+                    timeout=5,
+                ) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                self.assertTrue(body["ok"])
+                self.assertEqual(body["namespaceId"], "user_a")
+                self.assertEqual(body["items"][0]["id"], "mobile-1")
+                self.assertEqual(body["items"][0]["title"], "新卡")
+                self.assertEqual(body["items"][0]["createdAt"], "2026-03-28T10:11:12Z")
+                self.assertEqual(body["items"][0]["cardCreatedAt"], "2026-03-28T10:11:12Z")
+                self.assertEqual(body["nextCursor"], "opaque-cursor")
+                self.assertTrue(body["hasMore"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_http_recent_cards_requires_namespace(self) -> None:
+        config = Config(host="127.0.0.1", port=0, tables=["mobile"], vector_limit=20, per_page=20, min_score=0.4, asset_card_dir=Path("."))
+        server = build_server(config)
+        try:
+            import threading
+            import urllib.error
+            import urllib.request
+
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(
+                    f"http://{host}:{port}/api/v1/mobile/cards/recent",
+                    timeout=5,
+                )
+            body = json.loads(ctx.exception.read().decode("utf-8"))
+            self.assertEqual(ctx.exception.code, 400)
+            self.assertEqual(body["error"], "missing_namespace_id")
         finally:
             server.shutdown()
             server.server_close()

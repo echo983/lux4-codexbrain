@@ -123,7 +123,8 @@ def build_records(rows: list[dict[str, Any]], np: Any, umap: Any) -> list[PointR
         else:
             metadata = {}
         title = (
-            metadata.get("note_title")
+            metadata.get("display_title")
+            or metadata.get("note_title")
             or metadata.get("title")
             or row.get("title")
             or str(row.get("id") or "untitled")
@@ -135,8 +136,13 @@ def build_records(rows: list[dict[str, Any]], np: Any, umap: Any) -> list[PointR
             "source_type": metadata.get("source_type"),
             "card_schema": metadata.get("card_schema"),
             "created_at": metadata.get("created_at"),
+            "card_created_at": metadata.get("card_created_at"),
+            "namespace_id": metadata.get("namespace_id"),
             "path_in_snapshot": metadata.get("path_in_snapshot"),
             "keep_md_fid": metadata.get("keep_md_fid"),
+            "group_image_fids": metadata.get("group_image_fids"),
+            "content_completeness": metadata.get("content_completeness"),
+            "observation_confidence": metadata.get("observation_confidence"),
             "text_preview": text[:240],
             "umap_x": umap_point[0],
             "umap_y": umap_point[1],

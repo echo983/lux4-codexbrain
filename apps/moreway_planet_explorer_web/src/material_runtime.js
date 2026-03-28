@@ -12,6 +12,16 @@ export function createMaterialRuntime({
 }) {
   let shaderMaterial = null;
 
+  function applyFallbackMaterial() {
+    const fallbackMaterial = new THREE.MeshPhongMaterial({
+      color: 0x2b5166,
+      emissive: 0x08131a,
+      shininess: 18,
+      flatShading: false,
+    });
+    planet.material = fallbackMaterial;
+  }
+
   async function loadBakedAlbedo() {
     const urls = getBakedTextureUrls({
       dataSetBase,
@@ -50,6 +60,7 @@ export function createMaterialRuntime({
       setStatus('就绪');
     } catch (error) {
       console.error('Material initialization failed:', error);
+      applyFallbackMaterial();
       setStatus(`渲染初始化失败: ${error.message}`);
     }
   }

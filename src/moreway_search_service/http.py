@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse, urlencode
 from mobile_card_api import build_mobile_card_detail_response
 
 from .config import Config
-from .search import fetch_card_by_id, search_keep_cards
+from .search import fetch_card_by_id, list_recent_cards, search_keep_cards
 
 
 LOGGER = logging.getLogger(__name__)
@@ -43,7 +43,8 @@ def _build_mobile_result_item(item: dict[str, Any]) -> dict[str, Any]:
         "title": str(item.get("title") or "").strip() or "Untitled",
         "summary": summary,
         "subtitle": subtitle,
-        "createdAt": str(item.get("created_at") or ""),
+        "createdAt": str(item.get("card_created_at") or item.get("created_at") or ""),
+        "cardCreatedAt": str(item.get("card_created_at") or ""),
         "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
         "score": item.get("rerank_score"),
         "imageRefs": image_refs,
@@ -65,6 +66,17 @@ def _build_mobile_search_response(result: dict[str, Any]) -> dict[str, Any]:
         "appliedTags": [str(tag).strip() for tag in (result.get("required_tags") or []) if str(tag).strip()],
         "namespaceId": str(result.get("namespace_id") or ""),
         "results": items,
+    }
+
+
+def _build_recent_cards_response(result: dict[str, Any]) -> dict[str, Any]:
+    items = [_build_mobile_result_item(item) for item in result.get("items", [])]
+    return {
+        "ok": True,
+        "namespaceId": str(result.get("namespace_id") or ""),
+        "items": items,
+        "nextCursor": str(result.get("next_cursor") or ""),
+        "hasMore": bool(result.get("has_more")),
     }
 
 
@@ -405,6 +417,34 @@ class AppHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/healthz":
             self._write_json(HTTPStatus.OK, {"ok": True, "service": "moreway-search-service"})
+            return
+        if parsed.path == "/api/v1/mobile/cards/recent":
+            params = parse_qs(parsed.query, keep_blank_values=False)
+            namespace_id = (params.get("namespace_id") or [""])[0].strip()
+            cursor = (params.get("cursor") or [""])[0].strip()
+            doc_kind = (params.get("doc_kind") or ["asset_card"])[0].strip() or "asset_card"
+            source_table = (params.get("source_table") or [""])[0].strip()
+            try:
+                limit = int((params.get("limit") or ["20"])[0])
+            except ValueError:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_limit"})
+                return
+            if not namespace_id:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "missing_namespace_id"})
+                return
+            try:
+                result = list_recent_cards(
+                    tables=self.config.tables,
+                    namespace_id=namespace_id,
+                    cursor=cursor,
+                    limit=limit,
+                    doc_kind=doc_kind,
+                    source_table=source_table,
+                )
+            except ValueError as exc:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc).replace(" ", "_")})
+                return
+            self._write_json(HTTPStatus.OK, _build_recent_cards_response(result))
             return
         if parsed.path.startswith("/api/v1/mobile/cards/"):
             card_id = parsed.path.rsplit("/", 1)[-1].strip()

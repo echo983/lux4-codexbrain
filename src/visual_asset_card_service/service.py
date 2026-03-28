@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import uuid
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
@@ -239,6 +240,7 @@ def build_card_markdown(
     request_data: IngestRequest,
     image_fids: list[str],
     display_title: str,
+    card_created_at: str,
     body_markdown: str,
 ) -> str:
     return (
@@ -253,6 +255,7 @@ def build_card_markdown(
         f'display_title: "{display_title}"\n'
         f'object_hint: "{request_data.object_hint}"\n'
         f'group_note: "{request_data.group_note}"\n'
+        f'card_created_at: "{card_created_at}"\n'
         'content_completeness: "partial"\n'
         'observation_confidence: "medium"\n'
         f'source_client: "{request_data.source_client}"\n'
@@ -274,6 +277,7 @@ class VisualAssetCardService:
         image_fids = [put_nbss_bytes(item.content_bytes, item.mime_type) for item in request_data.images]
         capture_group_id = _capture_group_id(image_fids)
         card_id = f"mobile_capture_{uuid.uuid4().hex[:16]}"
+        card_created_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         body_markdown = generate_card_body_with_openai(request_data)
         display_title = derive_display_title(body_markdown, request_data)
         markdown = build_card_markdown(
@@ -282,6 +286,7 @@ class VisualAssetCardService:
             request_data=request_data,
             image_fids=image_fids,
             display_title=display_title,
+            card_created_at=card_created_at,
             body_markdown=body_markdown,
         )
         account_id, token, model = resolve_embedding_config()
@@ -294,6 +299,7 @@ class VisualAssetCardService:
             "group_image_fids": image_fids,
             "group_size": len(image_fids),
             "display_title": display_title,
+            "card_created_at": card_created_at,
             "object_hint": request_data.object_hint,
             "group_note": request_data.group_note,
             "content_completeness": "partial",
@@ -323,7 +329,8 @@ class VisualAssetCardService:
                 "source_type": ASSET_SOURCE_TYPE,
                 "source_table": str(response.get("table") or self.config.table),
                 "title": display_title,
-                "created_at": "",
+                "created_at": card_created_at,
+                "card_created_at": card_created_at,
                 "tags": [],
                 "group_image_fids": image_fids,
                 "md_url": "",
@@ -346,6 +353,7 @@ class VisualAssetCardService:
             "captureGroupId": capture_group_id,
             "groupImageFids": image_fids,
             "namespaceId": request_data.namespace_id,
+            "cardCreatedAt": card_created_at,
             "rowsWritten": int(response.get("rows_written", 0)),
             "table": str(response.get("table") or self.config.table),
             "card": card,

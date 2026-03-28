@@ -243,7 +243,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
     def test_search_mobile_capture_asset_card_has_no_file_backed_card_url(self) -> None:
         mobile = {
             "id": "mobile-1",
-            "text": "---\ndoc_kind: asset_card\nsource_type: mobile_photo_group\ncard_schema: mobile_capture_asset_card_v1\ncontent_completeness: partial\n---\n\n# 这是什么\n一张菜单照片\n\n# 直接可见信息\n可见法文菜单内容。\n\n# 关键信息提炼\n历史菜单。\n\n# 限制与风险\n部分内容模糊。",
+            "text": "---\ndoc_kind: asset_card\nsource_type: mobile_photo_group\ncard_schema: mobile_capture_asset_card_v1\ndisplay_title: 历史菜单照片\ncontent_completeness: partial\n---\n\n# 这是什么\n一张菜单照片\n\n# 直接可见信息\n可见法文菜单内容。\n\n# 关键信息提炼\n历史菜单。\n\n# 限制与风险\n部分内容模糊。",
             "metadata": {
                 "doc_kind": "asset_card",
                 "source_type": "mobile_photo_group",
@@ -251,6 +251,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 "capture_group_id": "cg_1",
                 "group_image_fids": ["NBSS:0xIMG"],
                 "namespace_id": "user_a",
+                "display_title": "历史菜单照片",
             },
             "_distance": 0.1,
             "_source_table": "mobile",
@@ -280,6 +281,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["results"][0]["card_url"], "")
         self.assertEqual(result["results"][0]["group_image_fids"], ["NBSS:0xIMG"])
         self.assertEqual(result["results"][0]["namespace_id"], "user_a")
+        self.assertEqual(result["results"][0]["title"], "历史菜单照片")
 
     def test_search_namespace_filters_asset_cards_and_excludes_raw_docs(self) -> None:
         asset = {
@@ -321,6 +323,35 @@ class MorewaySearchServiceTests(unittest.TestCase):
         self.assertEqual(result["total_results"], 1)
         self.assertEqual(result["results"][0]["id"], "asset-1")
         self.assertEqual(result["results"][0]["namespace_id"], "user_a")
+        self.assertEqual(result["results"][0]["title"], "名片")
+
+    def test_search_mobile_capture_asset_card_falls_back_to_subject_text_title(self) -> None:
+        mobile = {
+            "id": "mobile-1",
+            "text": "---\ndoc_kind: asset_card\nsource_type: mobile_photo_group\ncard_schema: mobile_capture_asset_card_v1\ncontent_completeness: partial\n---\n\n# 这是什么\n一张电影海报局部裁切图。\n\n# 限制与风险\n部分模糊。",
+            "metadata": {
+                "doc_kind": "asset_card",
+                "source_type": "mobile_photo_group",
+                "card_schema": "mobile_capture_asset_card_v1",
+            },
+            "_distance": 0.1,
+            "_source_table": "mobile",
+        }
+        with mock.patch("moreway_search_service.search.resolve_embedding_config", return_value=("a", "b", "emb")):
+            with mock.patch("moreway_search_service.search.resolve_reranker_config", return_value=("a", "b", "rer")):
+                with mock.patch("moreway_search_service.search.resolve_nbss_server_endpoint", return_value="http://localhost:8080"):
+                    with mock.patch("moreway_search_service.search.get_embeddings", return_value=[[0.1, 0.2]]):
+                        with mock.patch("moreway_search_service.search.post_json", return_value={"results": [mobile]}):
+                            with mock.patch("moreway_search_service.search.rerank", return_value=[{"id": 0, "score": 0.95}]):
+                                result = search_keep_cards(
+                                    "海报",
+                                    tables=["mobile"],
+                                    vector_limit=10,
+                                    per_page=10,
+                                    required_tags=[],
+                                    min_score=0.0,
+                                )
+        self.assertEqual(result["results"][0]["title"], "电影海报局部裁切图")
 
     def test_search_page_renders_asset_card_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -572,6 +603,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                 self.assertEqual(body["query"], "menu")
                 self.assertEqual(body["appliedTags"], ["food"])
                 self.assertEqual(body["results"][0]["id"], "mobile-1")
+                self.assertEqual(body["results"][0]["title"], "历史菜单照片")
                 self.assertEqual(body["namespaceId"], "user_a")
                 self.assertEqual(body["results"][0]["namespaceId"], "user_a")
                 self.assertEqual(body["results"][0]["imageRefs"], ["NBSS:0xIMG1", "NBSS:0xIMG2"])
@@ -623,6 +655,7 @@ class MorewaySearchServiceTests(unittest.TestCase):
                     body = json.loads(response.read().decode("utf-8"))
                 self.assertTrue(body["ok"])
                 self.assertEqual(body["id"], "mobile-1")
+                self.assertEqual(body["title"], "这是什么")
                 self.assertEqual(body["namespaceId"], "user_a")
                 self.assertEqual(body["imageRefs"], ["NBSS:0xIMG1"])
                 self.assertEqual(body["detail"]["meta"]["contentCompleteness"], "partial")

@@ -1074,6 +1074,37 @@ cargo run -- restart lux4_daemon
 
 ---
 
+## Moreway Planet Explorer Frontend
+
+前端开发服务器默认不纳入 daemon manager，直接单独启动更合适。
+
+前台启动：
+
+```bash
+cd /root/lux4-codexbrain
+scripts/run_moreway_planet_dev.sh
+```
+
+默认访问：
+
+- `http://127.0.0.1:18571/`
+
+可选环境变量：
+
+- `MOREWAY_PLANET_HOST`
+- `MOREWAY_PLANET_PORT`
+
+如果你想后台管理现有 Vite 进程，仓库里也保留了：
+
+```bash
+scripts/web_daemon.sh start
+scripts/web_daemon.sh status
+scripts/web_daemon.sh logs
+scripts/web_daemon.sh stop
+```
+
+---
+
 ## 下一阶段规划
 
 - 增加更完整的多轮上下文装配

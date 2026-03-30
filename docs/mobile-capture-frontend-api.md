@@ -13,10 +13,12 @@
 - 由后端生成一张对象级资产卡
 - 后端将图片写入 NBSS，将资产卡写入 LanceDB
 - 写入成功后直接返回统一 `card` detail payload，前端可直接展示
+- 如果请求带了经纬度，后端会自动 reverse geocode 并把地址上下文用于增强生成质量
 
 当前最小必填组级元数据：
 
 - `capturedAt`
+- `namespaceId`
 - `images`
 
 ## Scope
@@ -67,21 +69,7 @@ v1 不支持：
 - 后端会按顺序把多图交给模型
 - 顺序错误会直接影响正文质量
 
-### 3. 可选对象提示
-
-前端应允许用户选填 `objectHint`。
-
-推荐候选值：
-
-- 菜单
-- 名片
-- 海报
-- 公告
-- 药盒
-- 单据
-- 其他
-
-### 4. 可选补充备注
+### 3. 可选补充备注
 
 前端应允许用户选填 `groupNote`。
 
@@ -91,7 +79,7 @@ v1 不支持：
 - “只拍到了右下角”
 - “文字很小，已经尽量拍清楚”
 
-### 5. 上传前图片处理
+### 4. 上传前图片处理
 
 前端应在本地先做轻量处理再上传：
 
@@ -111,7 +99,7 @@ v1 不支持：
 - 上传原始大图
 - 上传未裁切的整张相册照片
 
-### 6. 结果反馈
+### 5. 结果反馈
 
 前端应向用户展示：
 
@@ -124,6 +112,7 @@ v1 不支持：
 - `cardId`
 - `namespaceId`
 - `capturedAt`
+- `captureAddress`
 - `captureGroupId`
 - `groupImageFids`
 
@@ -148,7 +137,6 @@ Content-Type: application/json
     "latitude": 40.4168,
     "longitude": -3.7038
   },
-  "objectHint": "菜单",
   "groupNote": "正面两张，反面一张",
   "sourceClient": "android-apk",
   "namespaceId": "ns_user_a13f09cd",
@@ -170,17 +158,6 @@ Content-Type: application/json
 ```
 
 #### Field Rules
-
-##### `objectHint`
-
-- type: `string`
-- optional
-- 推荐传
-
-说明：
-
-- 这是用户给出的对象提示，不是真实标签保证
-- 后端会把它作为生成提示的一部分
 
 ##### `capturedAt`
 
@@ -209,6 +186,8 @@ Content-Type: application/json
 
 - 这是组级位置，不是每张图各自的位置
 - 表示这次对象采集大致发生在哪
+- 如果提供，后端会自动调用 Google Geocoding API 转成可读地址
+- 前端不需要自行上传地址字符串
 
 ##### `groupNote`
 
@@ -232,7 +211,7 @@ Content-Type: application/json
 ##### `namespaceId`
 
 - type: `string`
-- optional but recommended
+- required
 
 说明：
 
@@ -296,6 +275,7 @@ Response body:
     "latitude": 40.4168,
     "longitude": -3.7038
   },
+  "captureAddress": "西班牙马德里某街道 1 号",
   "captureGroupId": "cg_ecdc7ea1d53ce0c2",
   "groupImageFids": [
     "NBSS:0xB14623759A454DBD"
@@ -319,6 +299,7 @@ Response body:
       "latitude": 40.4168,
       "longitude": -3.7038
     },
+    "captureAddress": "西班牙马德里某街道 1 号",
     "tags": [],
     "imageRefs": ["NBSS:0xB14623759A454DBD"],
     "mdUrl": "",
@@ -362,6 +343,8 @@ Response body:
   - 本次对象采集的时间
 - `captureLocation`
   - 本次对象采集的组级位置；没有则为 `null`
+- `captureAddress`
+  - 后端根据 `captureLocation` 自动 reverse geocode 后得到的可读地址；没有则为空字符串
 - `captureGroupId`
   - 服务端为本次请求生成的组标识
 - `groupImageFids`
@@ -456,7 +439,7 @@ Response body:
 - 能从相机或相册选择多张图片
 - 能保证“同一对象一次提交”
 - 能调整图片顺序
-- 能填写 `objectHint`
+- 能提供 `namespaceId`
 - 能填写 `groupNote`
 - 能把图片压缩后转成 base64
 - 能调用 `POST /api/v1/visual-cards`
@@ -471,11 +454,10 @@ Response body:
 1. 用户创建一次对象采集
 2. 加入 1 到 N 张图片
 3. 调整顺序
-4. 选填对象类型
-5. 选填备注
-6. 点击提交
-7. 显示处理中
-8. 显示成功或失败
+4. 选填备注
+5. 点击提交
+6. 显示处理中
+7. 显示成功或失败
 
 推荐前端文案：
 

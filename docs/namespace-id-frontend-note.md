@@ -45,6 +45,11 @@
 
 ```json
 {
+  "capturedAt": "2026-03-30T10:34:56Z",
+  "captureLocation": {
+    "latitude": 40.4168,
+    "longitude": -3.7038
+  },
   "objectHint": "名片",
   "groupNote": "正反面",
   "sourceClient": "android-apk",
@@ -63,6 +68,8 @@
 成功响应现在也会带：
 
 - 顶层 `namespaceId`
+- 顶层 `capturedAt`
+- 顶层 `captureLocation`
 - `card.namespaceId`
 
 所以前端写入成功后可以直接保留这个值，不需要自己推导。

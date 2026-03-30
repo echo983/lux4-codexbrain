@@ -21,6 +21,7 @@ class VisualAssetCardServiceTests(unittest.TestCase):
     def test_derive_display_title_from_subject_section(self) -> None:
         body = "# 这是什么\n一张法文宴会菜单。\n\n# 直接可见信息\n可见日期。\n"
         payload = {
+            "capturedAt": "2026-03-30T12:34:56+02:00",
             "objectHint": "菜单",
             "groupNote": "",
             "sourceClient": "android-apk",
@@ -37,10 +38,12 @@ class VisualAssetCardServiceTests(unittest.TestCase):
 
     def test_parse_ingest_request_sorts_and_decodes_images(self) -> None:
         payload = {
+            "capturedAt": "2026-03-30T10:34:56Z",
             "objectHint": "菜单",
             "groupNote": "两张",
             "sourceClient": "android-apk",
             "namespaceId": "user_a",
+            "captureLocation": {"latitude": 40.4168, "longitude": -3.7038},
             "images": [
                 {
                     "contentBase64": base64.b64encode(b"b").decode("ascii"),
@@ -61,13 +64,17 @@ class VisualAssetCardServiceTests(unittest.TestCase):
         self.assertEqual(result.images[0].content_bytes, b"a")
         self.assertEqual(result.object_hint, "菜单")
         self.assertEqual(result.namespace_id, "user_a")
+        self.assertEqual(result.captured_at, "2026-03-30T10:34:56Z")
+        self.assertEqual(result.capture_location, {"latitude": 40.4168, "longitude": -3.7038})
 
     def test_ingest_writes_nbss_and_lancedb(self) -> None:
         payload = {
+            "capturedAt": "2026-03-30T10:34:56Z",
             "objectHint": "名片",
             "groupNote": "正反面",
             "sourceClient": "android-apk",
             "namespaceId": "user_a",
+            "captureLocation": {"latitude": 40.4168, "longitude": -3.7038},
             "images": [
                 {
                     "contentBase64": base64.b64encode(b"img-a").decode("ascii"),
@@ -97,22 +104,34 @@ class VisualAssetCardServiceTests(unittest.TestCase):
         self.assertEqual(upsert_payload["table"], "mobile_cards")
         self.assertEqual(upsert_payload["documents"][0]["metadata"]["group_image_fids"], ["NBSS:0xA", "NBSS:0xB"])
         self.assertEqual(upsert_payload["documents"][0]["metadata"]["namespace_id"], "user_a")
+        self.assertEqual(upsert_payload["documents"][0]["metadata"]["created_at"], "2026-03-30T10:34:56Z")
+        self.assertEqual(upsert_payload["documents"][0]["metadata"]["captured_at"], "2026-03-30T10:34:56Z")
+        self.assertEqual(upsert_payload["documents"][0]["metadata"]["capture_location_latitude"], 40.4168)
+        self.assertEqual(upsert_payload["documents"][0]["metadata"]["capture_location_longitude"], -3.7038)
         self.assertTrue(upsert_payload["documents"][0]["metadata"]["card_created_at"].endswith("Z"))
         self.assertEqual(result["cardSchema"], ASSET_CARD_SCHEMA)
         self.assertEqual(result["rowsWritten"], 1)
         self.assertEqual(result["namespaceId"], "user_a")
+        self.assertEqual(result["capturedAt"], "2026-03-30T10:34:56Z")
+        self.assertEqual(result["captureLocation"], {"latitude": 40.4168, "longitude": -3.7038})
         self.assertTrue(result["cardCreatedAt"].endswith("Z"))
         self.assertEqual(result["card"]["id"], result["cardId"])
         self.assertEqual(result["card"]["sourceTable"], "mobile_cards")
         self.assertEqual(result["card"]["namespaceId"], "user_a")
+        self.assertEqual(result["card"]["createdAt"], "2026-03-30T10:34:56Z")
+        self.assertEqual(result["card"]["capturedAt"], "2026-03-30T10:34:56Z")
+        self.assertEqual(result["card"]["captureLocation"], {"latitude": 40.4168, "longitude": -3.7038})
         self.assertEqual(result["card"]["cardCreatedAt"], result["cardCreatedAt"])
         self.assertEqual(result["card"]["imageRefs"], ["NBSS:0xA", "NBSS:0xB"])
+        self.assertEqual(result["card"]["detail"]["meta"]["capturedAt"], "2026-03-30T10:34:56Z")
+        self.assertEqual(result["card"]["detail"]["meta"]["captureLocation"], {"latitude": 40.4168, "longitude": -3.7038})
         self.assertEqual(result["card"]["detail"]["blocks"][0]["title"], "这是什么")
         self.assertEqual(result["card"]["summary"], "名片")
         self.assertEqual(result["card"]["title"], "名片")
 
     def test_parse_ingest_request_rejects_invalid_base64(self) -> None:
         payload = {
+            "capturedAt": "2026-03-30T10:34:56Z",
             "images": [
                 {
                     "contentBase64": "not-base64",
@@ -122,6 +141,34 @@ class VisualAssetCardServiceTests(unittest.TestCase):
             ]
         }
         with self.assertRaisesRegex(ValueError, "valid base64"):
+            parse_ingest_request(payload)
+
+    def test_parse_ingest_request_requires_captured_at(self) -> None:
+        payload = {
+            "images": [
+                {
+                    "contentBase64": base64.b64encode(b"x").decode("ascii"),
+                    "mimeType": "image/jpeg",
+                    "order": 1,
+                }
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "capturedAt is required"):
+            parse_ingest_request(payload)
+
+    def test_parse_ingest_request_rejects_invalid_capture_location(self) -> None:
+        payload = {
+            "capturedAt": "2026-03-30T10:34:56Z",
+            "captureLocation": {"latitude": "bad", "longitude": 1},
+            "images": [
+                {
+                    "contentBase64": base64.b64encode(b"x").decode("ascii"),
+                    "mimeType": "image/jpeg",
+                    "order": 1,
+                }
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "captureLocation latitude/longitude must be numbers"):
             parse_ingest_request(payload)
 
     def test_http_healthz_and_ingest(self) -> None:

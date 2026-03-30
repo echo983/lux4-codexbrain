@@ -33,6 +33,15 @@ def _build_mobile_result_item(item: dict[str, Any]) -> dict[str, Any]:
     subtitle = " · ".join(part for part in detail_fields if part)
     if not subtitle:
         subtitle = str(item.get("source_type") or item.get("doc_kind") or "").strip()
+    capture_location = None
+    if item.get("capture_location_latitude") not in (None, "") and item.get("capture_location_longitude") not in (None, ""):
+        try:
+            capture_location = {
+                "latitude": float(item.get("capture_location_latitude")),
+                "longitude": float(item.get("capture_location_longitude")),
+            }
+        except (TypeError, ValueError):
+            capture_location = None
     return {
         "id": str(item.get("id") or ""),
         "docKind": str(item.get("doc_kind") or ""),
@@ -43,8 +52,10 @@ def _build_mobile_result_item(item: dict[str, Any]) -> dict[str, Any]:
         "title": str(item.get("title") or "").strip() or "Untitled",
         "summary": summary,
         "subtitle": subtitle,
-        "createdAt": str(item.get("card_created_at") or item.get("created_at") or ""),
+        "createdAt": str(item.get("captured_at") or item.get("created_at") or item.get("card_created_at") or ""),
+        "capturedAt": str(item.get("captured_at") or item.get("created_at") or ""),
         "cardCreatedAt": str(item.get("card_created_at") or ""),
+        "captureLocation": capture_location,
         "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
         "score": item.get("rerank_score"),
         "imageRefs": image_refs,

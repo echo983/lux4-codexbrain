@@ -26,8 +26,13 @@
   "namespaceId": "ns_user_a13f09cd",
   "title": "某公司联系人名片",
   "summary": "卡片摘要",
-  "createdAt": "",
+  "createdAt": "2026-03-30T10:34:56Z",
+  "capturedAt": "2026-03-30T10:34:56Z",
   "cardCreatedAt": "2026-03-28T18:01:25Z",
+  "captureLocation": {
+    "latitude": 40.4168,
+    "longitude": -3.7038
+  },
   "tags": [],
   "imageRefs": ["NBSS:0x..."],
   "mdUrl": "",
@@ -86,8 +91,13 @@
     "namespaceId": "ns_user_a13f09cd",
     "title": "某公司联系人名片",
     "summary": "名片",
-    "createdAt": "",
+    "createdAt": "2026-03-30T10:34:56Z",
+    "capturedAt": "2026-03-30T10:34:56Z",
     "cardCreatedAt": "2026-03-28T18:01:25Z",
+    "captureLocation": {
+      "latitude": 40.4168,
+      "longitude": -3.7038
+    },
     "tags": [],
     "imageRefs": ["NBSS:0xA", "NBSS:0xB"],
     "mdUrl": "",
@@ -149,6 +159,7 @@
 - `title`
 - `summary`
 - `imageRefs[0]`
+- `createdAt`
 - `cardCreatedAt`
 - `detail.meta.contentCompleteness`
 
@@ -156,6 +167,8 @@
 
 - `title`
 - `summary`
+- `capturedAt`
+- `captureLocation`
 - `imageRefs`
 - `detail.blocks`
 
@@ -173,6 +186,22 @@
 
 - NBSS 图片 FID 列表
 - 可直接走现有 NBSS 取图链路
+
+### `createdAt` / `capturedAt`
+
+- 对手机视觉资产卡，这两个字段应理解为采集时间
+- 当前后端会把它们对齐为同一个值
+
+### `cardCreatedAt`
+
+- 后端实际生成卡片并写入的时间
+- 和采集时间不是一回事
+
+### `captureLocation`
+
+- 组级采集位置
+- 不是每张图各自的位置
+- 没有则为 `null`
 
 ### `detail.blocks`
 

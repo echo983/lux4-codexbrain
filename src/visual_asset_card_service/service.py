@@ -33,20 +33,24 @@ class InputImage:
 
 @dataclass(frozen=True)
 class IngestRequest:
+    captured_at: str
     object_hint: str
     group_note: str
     source_client: str
     namespace_id: str
+    capture_location: dict[str, float] | None
     images: list[InputImage]
 
 
 def parse_ingest_request(payload: dict[str, Any] | str | None) -> IngestRequest:
     if not isinstance(payload, dict):
         raise ValueError("payload must be a JSON object")
+    captured_at = _parse_captured_at(payload.get("capturedAt"))
     object_hint = str(payload.get("objectHint") or "").strip()
     group_note = str(payload.get("groupNote") or "").strip()
     source_client = str(payload.get("sourceClient") or "").strip()
     namespace_id = str(payload.get("namespaceId") or "").strip()
+    capture_location = _parse_capture_location(payload.get("captureLocation"))
     raw_images = payload.get("images")
     if not isinstance(raw_images, list) or not raw_images:
         raise ValueError("images must be a non-empty array")
@@ -73,12 +77,47 @@ def parse_ingest_request(payload: dict[str, Any] | str | None) -> IngestRequest:
         images.append(InputImage(content_bytes=content_bytes, mime_type=mime_type, order=order, role=role))
     images.sort(key=lambda item: item.order)
     return IngestRequest(
+        captured_at=captured_at,
         object_hint=object_hint,
         group_note=group_note,
         source_client=source_client,
         namespace_id=namespace_id,
+        capture_location=capture_location,
         images=images,
     )
+
+
+def _parse_captured_at(value: Any) -> str:
+    captured_at = str(value or "").strip()
+    if not captured_at:
+        raise ValueError("capturedAt is required")
+    normalized = captured_at.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError("capturedAt must be a valid ISO 8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("capturedAt must include timezone information")
+    return parsed.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_capture_location(value: Any) -> dict[str, float] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("captureLocation must be an object")
+    if "latitude" not in value or "longitude" not in value:
+        raise ValueError("captureLocation must include latitude and longitude")
+    try:
+        latitude = float(value.get("latitude"))
+        longitude = float(value.get("longitude"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("captureLocation latitude/longitude must be numbers") from exc
+    if not (-90.0 <= latitude <= 90.0):
+        raise ValueError("captureLocation latitude must be between -90 and 90")
+    if not (-180.0 <= longitude <= 180.0):
+        raise ValueError("captureLocation longitude must be between -180 and 180")
+    return {"latitude": latitude, "longitude": longitude}
 
 
 def put_nbss_bytes(data: bytes, mime_type: str) -> str:
@@ -243,6 +282,12 @@ def build_card_markdown(
     card_created_at: str,
     body_markdown: str,
 ) -> str:
+    capture_location_lines = ""
+    if request_data.capture_location is not None:
+        capture_location_lines = (
+            f'capture_location_latitude: {request_data.capture_location["latitude"]}\n'
+            f'capture_location_longitude: {request_data.capture_location["longitude"]}\n'
+        )
     return (
         "---\n"
         f"id: {card_id}\n"
@@ -253,8 +298,11 @@ def build_card_markdown(
         f"group_image_fids: {json.dumps(image_fids, ensure_ascii=False)}\n"
         f"group_size: {len(image_fids)}\n"
         f'display_title: "{display_title}"\n'
+        f'created_at: "{request_data.captured_at}"\n'
+        f'captured_at: "{request_data.captured_at}"\n'
         f'object_hint: "{request_data.object_hint}"\n'
         f'group_note: "{request_data.group_note}"\n'
+        f"{capture_location_lines}"
         f'card_created_at: "{card_created_at}"\n'
         'content_completeness: "partial"\n'
         'observation_confidence: "medium"\n'
@@ -299,6 +347,8 @@ class VisualAssetCardService:
             "group_image_fids": image_fids,
             "group_size": len(image_fids),
             "display_title": display_title,
+            "created_at": request_data.captured_at,
+            "captured_at": request_data.captured_at,
             "card_created_at": card_created_at,
             "object_hint": request_data.object_hint,
             "group_note": request_data.group_note,
@@ -307,6 +357,9 @@ class VisualAssetCardService:
             "source_client": request_data.source_client,
             "namespace_id": request_data.namespace_id,
         }
+        if request_data.capture_location is not None:
+            metadata["capture_location_latitude"] = request_data.capture_location["latitude"]
+            metadata["capture_location_longitude"] = request_data.capture_location["longitude"]
         response = post_json(
             f"{resolve_lancedb_url()}/upsert",
             {
@@ -329,7 +382,8 @@ class VisualAssetCardService:
                 "source_type": ASSET_SOURCE_TYPE,
                 "source_table": str(response.get("table") or self.config.table),
                 "title": display_title,
-                "created_at": card_created_at,
+                "created_at": request_data.captured_at,
+                "captured_at": request_data.captured_at,
                 "card_created_at": card_created_at,
                 "tags": [],
                 "group_image_fids": image_fids,
@@ -343,6 +397,12 @@ class VisualAssetCardService:
                 "category_path": "",
                 "priority": "",
                 "namespace_id": request_data.namespace_id,
+                "capture_location_latitude": (
+                    request_data.capture_location["latitude"] if request_data.capture_location is not None else ""
+                ),
+                "capture_location_longitude": (
+                    request_data.capture_location["longitude"] if request_data.capture_location is not None else ""
+                ),
             }
         )
         return {
@@ -353,6 +413,8 @@ class VisualAssetCardService:
             "captureGroupId": capture_group_id,
             "groupImageFids": image_fids,
             "namespaceId": request_data.namespace_id,
+            "capturedAt": request_data.captured_at,
+            "captureLocation": request_data.capture_location,
             "cardCreatedAt": card_created_at,
             "rowsWritten": int(response.get("rows_written", 0)),
             "table": str(response.get("table") or self.config.table),

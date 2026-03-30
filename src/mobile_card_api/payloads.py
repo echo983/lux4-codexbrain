@@ -52,6 +52,20 @@ def _normalize_string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in (value or []) if str(item).strip()]
 
 
+def _normalize_capture_location(item: Mapping[str, Any]) -> dict[str, float] | None:
+    latitude = item.get("capture_location_latitude")
+    longitude = item.get("capture_location_longitude")
+    if latitude in (None, "") or longitude in (None, ""):
+        return None
+    try:
+        return {
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 def _derive_title(item: Mapping[str, Any], blocks: list[dict[str, str]]) -> str:
     title = str(item.get("title") or "").strip()
     if title:
@@ -88,8 +102,10 @@ def build_mobile_card_detail_response(item: Mapping[str, Any], *, ok: bool = Tru
         "namespaceId": str(item.get("namespace_id") or ""),
         "title": title,
         "summary": summary,
-        "createdAt": str(item.get("card_created_at") or item.get("created_at") or ""),
+        "createdAt": str(item.get("captured_at") or item.get("created_at") or item.get("card_created_at") or ""),
+        "capturedAt": str(item.get("captured_at") or item.get("created_at") or ""),
         "cardCreatedAt": str(item.get("card_created_at") or ""),
+        "captureLocation": _normalize_capture_location(item),
         "tags": _normalize_string_list(item.get("tags")),
         "imageRefs": _normalize_string_list(item.get("group_image_fids")),
         "mdUrl": str(item.get("md_url") or ""),
@@ -106,6 +122,8 @@ def build_mobile_card_detail_response(item: Mapping[str, Any], *, ok: bool = Tru
                 "observationConfidence": str(item.get("observation_confidence") or ""),
                 "categoryPath": str(item.get("category_path") or ""),
                 "priority": str(item.get("priority") or ""),
+                "capturedAt": str(item.get("captured_at") or item.get("created_at") or ""),
+                "captureLocation": _normalize_capture_location(item),
             },
             "blocks": blocks,
         },

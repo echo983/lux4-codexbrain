@@ -91,8 +91,13 @@ Content-Type: application/json
       "title": "Laboratorio Echevarne 检验报告领取说明单",
       "summary": "西班牙巴塞罗那实验室的检验结果领取与线上查询说明。",
       "subtitle": "mobile_photo_group",
-      "createdAt": "2026-03-26",
+      "createdAt": "2026-03-30T10:34:56Z",
+      "capturedAt": "2026-03-30T10:34:56Z",
       "cardCreatedAt": "2026-03-28T18:01:25Z",
+      "captureLocation": {
+        "latitude": 40.4168,
+        "longitude": -3.7038
+      },
       "tags": [],
       "score": 0.93,
       "imageRefs": [
@@ -118,8 +123,10 @@ Content-Type: application/json
 - `title`: 结果标题
 - `summary`: 移动端列表主摘要
 - `subtitle`: 次级说明，可能来自卡片字段、分类路径或 source type
-- `createdAt`: 创建时间
+- `createdAt`: 对手机视觉资产卡，优先表示采集时间
+- `capturedAt`: 对象采集时间；没有则为空字符串
 - `cardCreatedAt`: 资产卡稳定创建时间，recent/feed 更应优先用它
+- `captureLocation`: 组级采集位置；没有则为 `null`
 - `tags`: 标签列表
 - `score`: rerank 分数
 - `imageRefs`: 关联图片的 NBSS FID 列表；没有则为空数组
@@ -174,8 +181,13 @@ GET /api/v1/mobile/cards/mobile_capture_1e393de41d014127?source_table=mobile_cap
   "namespaceId": "ns_user_a13f09cd",
   "title": "Laboratorio Echevarne 检验报告领取说明单",
   "summary": "西班牙巴塞罗那实验室的检验结果领取说明。",
-  "createdAt": "",
+  "createdAt": "2026-03-30T10:34:56Z",
+  "capturedAt": "2026-03-30T10:34:56Z",
   "cardCreatedAt": "2026-03-28T18:01:25Z",
+  "captureLocation": {
+    "latitude": 40.4168,
+    "longitude": -3.7038
+  },
   "tags": [],
   "imageRefs": [
     "NBSS:0x6A15E856AF448635",
@@ -194,7 +206,12 @@ GET /api/v1/mobile/cards/mobile_capture_1e393de41d014127?source_table=mobile_cap
       "contentCompleteness": "partial",
       "observationConfidence": "medium",
       "categoryPath": "",
-      "priority": ""
+      "priority": "",
+      "capturedAt": "2026-03-30T10:34:56Z",
+      "captureLocation": {
+        "latitude": 40.4168,
+        "longitude": -3.7038
+      }
     },
     "blocks": [
       {
@@ -212,6 +229,8 @@ GET /api/v1/mobile/cards/mobile_capture_1e393de41d014127?source_table=mobile_cap
 - `markdown` 返回完整卡片正文，前端如需原样展示可以直接使用
 - `detail.blocks` 返回后端预解析好的块结构，便于按 schema 渲染
 - `detail.highlights` 是通用高价值字段；没有则为空字符串
+- `createdAt` / `capturedAt` 对手机视觉卡应理解为采集时间
+- `cardCreatedAt` 仍是后端生成卡片的时间
 
 错误响应：
 

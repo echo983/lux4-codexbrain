@@ -33,6 +33,7 @@ class SearchHit:
     source_type: str
     card_schema: str
     created_at: str
+    captured_at: str
     card_created_at: str
     tags: list[str]
     category_path: str
@@ -46,6 +47,8 @@ class SearchHit:
     content_completeness: str
     observation_confidence: str
     namespace_id: str
+    capture_location_latitude: float | None
+    capture_location_longitude: float | None
 
 
 def _prefer_hit(left: SearchHit, right: SearchHit) -> SearchHit:
@@ -214,6 +217,28 @@ def _extract_card_created_at(metadata: dict[str, Any], frontmatter: dict[str, An
     return str(metadata.get("card_created_at") or frontmatter.get("card_created_at") or "").strip()
 
 
+def _extract_captured_at(metadata: dict[str, Any], frontmatter: dict[str, Any]) -> str:
+    return str(
+        metadata.get("captured_at")
+        or frontmatter.get("captured_at")
+        or metadata.get("created_at")
+        or frontmatter.get("created_at")
+        or ""
+    ).strip()
+
+
+def _extract_capture_location_coordinate(metadata: dict[str, Any], frontmatter: dict[str, Any], key: str) -> float | None:
+    value = metadata.get(key)
+    if value in (None, ""):
+        value = frontmatter.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _encode_recent_cursor(card_created_at: str, item_id: str, source_table: str) -> str:
     raw = json.dumps({"card_created_at": card_created_at, "id": item_id, "source_table": source_table}, ensure_ascii=False).encode("utf-8")
     return urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -345,6 +370,7 @@ def search_keep_cards(
                     source_type=str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
                     card_schema=str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
                     created_at=str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
+                    captured_at=_extract_captured_at(metadata, frontmatter),
                     card_created_at=_extract_card_created_at(metadata, frontmatter),
                     tags=candidate["tags"],
                     category_path=str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
@@ -365,6 +391,12 @@ def search_keep_cards(
                         metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""
                     ),
                     namespace_id=item_namespace_id,
+                    capture_location_latitude=_extract_capture_location_coordinate(
+                        metadata, frontmatter, "capture_location_latitude"
+                    ),
+                    capture_location_longitude=_extract_capture_location_coordinate(
+                        metadata, frontmatter, "capture_location_longitude"
+                    ),
                 )
             )
 
@@ -428,6 +460,7 @@ def search_keep_cards(
                 "source_type": hit.source_type,
                 "card_schema": hit.card_schema,
                 "created_at": hit.created_at,
+                "captured_at": hit.captured_at,
                 "card_created_at": hit.card_created_at,
                 "tags": hit.tags,
                 "category_path": hit.category_path,
@@ -443,6 +476,8 @@ def search_keep_cards(
                 "content_completeness": hit.content_completeness,
                 "observation_confidence": hit.observation_confidence,
                 "namespace_id": hit.namespace_id,
+                "capture_location_latitude": hit.capture_location_latitude,
+                "capture_location_longitude": hit.capture_location_longitude,
             }
             for hit in paged_hits
         ],
@@ -499,12 +534,19 @@ def fetch_card_by_id(
                 "source_type": str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
                 "card_schema": str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
                 "created_at": str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
+                "captured_at": _extract_captured_at(metadata, frontmatter),
                 "card_created_at": _extract_card_created_at(metadata, frontmatter),
                 "tags": _coerce_tags(frontmatter, metadata),
                 "category_path": str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
                 "priority": str(metadata.get("priority") or frontmatter.get("priority") or ""),
                 "keep_md_fid": str(metadata.get("keep_md_fid") or ""),
                 "keep_json_fid": str(metadata.get("keep_json_fid") or ""),
+                "capture_location_latitude": _extract_capture_location_coordinate(
+                    metadata, frontmatter, "capture_location_latitude"
+                ),
+                "capture_location_longitude": _extract_capture_location_coordinate(
+                    metadata, frontmatter, "capture_location_longitude"
+                ),
                 "group_image_fids": _coerce_string_list(
                     metadata.get("group_image_fids"),
                     frontmatter.get("group_image_fids"),
@@ -598,6 +640,7 @@ def list_recent_cards(
                     "source_type": str(metadata.get("source_type") or frontmatter.get("source_type") or ""),
                     "card_schema": str(metadata.get("card_schema") or frontmatter.get("card_schema") or ""),
                     "created_at": str(metadata.get("created_at") or frontmatter.get("created_at") or ""),
+                    "captured_at": _extract_captured_at(metadata, frontmatter),
                     "card_created_at": card_created_at,
                     "tags": _coerce_tags(frontmatter, metadata),
                     "category_path": str(metadata.get("category_path") or frontmatter.get("category_path") or ""),
@@ -614,6 +657,12 @@ def list_recent_cards(
                     "content_completeness": str(metadata.get("content_completeness") or frontmatter.get("content_completeness") or ""),
                     "observation_confidence": str(metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""),
                     "namespace_id": item_namespace_id,
+                    "capture_location_latitude": _extract_capture_location_coordinate(
+                        metadata, frontmatter, "capture_location_latitude"
+                    ),
+                    "capture_location_longitude": _extract_capture_location_coordinate(
+                        metadata, frontmatter, "capture_location_longitude"
+                    ),
                 }
             )
 

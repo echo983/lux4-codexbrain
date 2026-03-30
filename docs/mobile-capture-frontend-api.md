@@ -14,6 +14,11 @@
 - 后端将图片写入 NBSS，将资产卡写入 LanceDB
 - 写入成功后直接返回统一 `card` detail payload，前端可直接展示
 
+当前最小必填组级元数据：
+
+- `capturedAt`
+- `images`
+
 ## Scope
 
 v1 仅支持：
@@ -118,6 +123,7 @@ v1 不支持：
 
 - `cardId`
 - `namespaceId`
+- `capturedAt`
 - `captureGroupId`
 - `groupImageFids`
 
@@ -137,6 +143,11 @@ Content-Type: application/json
 
 ```json
 {
+  "capturedAt": "2026-03-30T10:34:56Z",
+  "captureLocation": {
+    "latitude": 40.4168,
+    "longitude": -3.7038
+  },
   "objectHint": "菜单",
   "groupNote": "正面两张，反面一张",
   "sourceClient": "android-apk",
@@ -170,6 +181,34 @@ Content-Type: application/json
 
 - 这是用户给出的对象提示，不是真实标签保证
 - 后端会把它作为生成提示的一部分
+
+##### `capturedAt`
+
+- type: `string`
+- required
+
+说明：
+
+- 这是这组对象采集发生的时间
+- 必须是带时区的 ISO 8601 时间戳
+- 推荐直接传 UTC，例如 `2026-03-30T10:34:56Z`
+
+##### `captureLocation`
+
+- type: `object`
+- optional
+
+字段：
+
+- `latitude`
+  - type: `number`
+- `longitude`
+  - type: `number`
+
+说明：
+
+- 这是组级位置，不是每张图各自的位置
+- 表示这次对象采集大致发生在哪
 
 ##### `groupNote`
 
@@ -252,6 +291,11 @@ Response body:
   "cardSchema": "mobile_capture_asset_card_v1",
   "status": "written",
   "namespaceId": "ns_user_a13f09cd",
+  "capturedAt": "2026-03-30T10:34:56Z",
+  "captureLocation": {
+    "latitude": 40.4168,
+    "longitude": -3.7038
+  },
   "captureGroupId": "cg_ecdc7ea1d53ce0c2",
   "groupImageFids": [
     "NBSS:0xB14623759A454DBD"
@@ -268,8 +312,13 @@ Response body:
     "namespaceId": "ns_user_a13f09cd",
     "title": "某餐厅菜单照片",
     "summary": "菜单内容摘要",
-    "createdAt": "",
+    "createdAt": "2026-03-30T10:34:56Z",
+    "capturedAt": "2026-03-30T10:34:56Z",
     "cardCreatedAt": "2026-03-28T18:01:25Z",
+    "captureLocation": {
+      "latitude": 40.4168,
+      "longitude": -3.7038
+    },
     "tags": [],
     "imageRefs": ["NBSS:0xB14623759A454DBD"],
     "mdUrl": "",
@@ -309,6 +358,10 @@ Response body:
   - 当前固定为 `written`
 - `namespaceId`
   - 本次写入资产卡的 namespace
+- `capturedAt`
+  - 本次对象采集的时间
+- `captureLocation`
+  - 本次对象采集的组级位置；没有则为 `null`
 - `captureGroupId`
   - 服务端为本次请求生成的组标识
 - `groupImageFids`

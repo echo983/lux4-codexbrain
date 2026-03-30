@@ -65,7 +65,12 @@
       "summary": "Example summary",
       "subtitle": "mobile_photo_group",
       "createdAt": "2026-03-28T18:01:25Z",
+      "capturedAt": "2026-03-28T18:01:25Z",
       "cardCreatedAt": "2026-03-28T18:01:25Z",
+      "captureLocation": {
+        "latitude": 40.4168,
+        "longitude": -3.7038
+      },
       "tags": [],
       "score": null,
       "imageRefs": ["NBSS:0x1234"],
@@ -123,6 +128,12 @@
   - `imageRefs[0]`
   - `createdAt`
   - `contentCompleteness`
+
+补充：
+
+- 对手机视觉资产卡，`createdAt` 应理解为采集时间
+- `cardCreatedAt` 是后端写卡时间
+- `captureLocation` 是组级采集位置，没有则为 `null`
 
 ## Current Known Limitation
 

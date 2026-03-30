@@ -1085,6 +1085,7 @@ PYTHONPATH=src python3 -m moreway_asset_service
 
 - `lux4_daemon`
 - `moreway_search_service`
+- `moreway_asset_service`
 - `visual_asset_card_service`
 
 说明：

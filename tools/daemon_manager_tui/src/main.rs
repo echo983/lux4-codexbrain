@@ -389,8 +389,15 @@ fn daemon_specs() -> Vec<DaemonSpec> {
             name: "moreway_search_service",
             module: "moreway_search_service",
             port: 18561,
-            description: "Search and mobile card detail API",
+            description: "Legacy search and compatibility API",
             log_path: "var/logs/moreway_search_service.stdout.log",
+        },
+        DaemonSpec {
+            name: "moreway_asset_service",
+            module: "moreway_asset_service",
+            port: 18562,
+            description: "Namespace-aware asset read service",
+            log_path: "var/logs/moreway_asset_service.stdout.log",
         },
         DaemonSpec {
             name: "visual_asset_card_service",

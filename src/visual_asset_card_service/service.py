@@ -6,6 +6,7 @@ import json
 import os
 import re
 import uuid
+from functools import lru_cache
 from datetime import UTC, datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -257,32 +258,23 @@ def _build_vision_prompt(request_data: IngestRequest, capture_address: CaptureAd
         capture_place_id = capture_address.place_id or "未提供"
         capture_location_type = capture_address.location_type or "未提供"
         capture_result_types = "、".join(capture_address.result_types) or "未提供"
-    return (
-        "你在生成手机视觉信息对象的资产卡正文。"
-        "这些图片属于同一个现实对象的多张拍摄结果。"
-        "只根据可见内容写，不要补全现实，不要编造缺失信息。"
-        "如果信息不完整，明确指出不完整。"
-        "输出中文 Markdown，且只输出以下 4 个区块，顺序固定：\n"
-        "# 这是什么\n"
-        "# 直接可见信息\n"
-        "# 关键信息提炼\n"
-        "# 限制与风险\n\n"
-        "要求：\n"
-        "- 多图按给定顺序综合理解为同一对象。\n"
-        "- 对文字可见部分尽量提取，但不要伪造看不清的内容。\n"
-        "- 对时间、地点、价格、联系方式等仅在可见时写出。\n"
-        "- 若图片模糊、遮挡、裁切不完整，要在“限制与风险”里写明。\n"
-        "- 下列采集上下文是辅助信息，可用于增强理解，但不能覆盖图片可见事实。\n"
-        f"- 用户备注：{group_note}\n"
-        f"- 采集时间：{captured_at}\n"
-        f"- 采集经纬度：{capture_location}\n"
-        f"- 采集地址：{capture_address_text}\n"
-        f"- 地点 place_id：{capture_place_id}\n"
-        f"- 地理精度类型：{capture_location_type}\n"
-        f"- 地理结果类型：{capture_result_types}\n"
-        f"- 来源客户端：{source_client}\n"
-        f"- 命名空间：{namespace_id}\n"
+    return _load_vision_prompt_template().format(
+        group_note=group_note,
+        captured_at=captured_at,
+        capture_location=capture_location,
+        capture_address=capture_address_text,
+        capture_place_id=capture_place_id,
+        capture_location_type=capture_location_type,
+        capture_result_types=capture_result_types,
+        source_client=source_client,
+        namespace_id=namespace_id,
     )
+
+
+@lru_cache(maxsize=1)
+def _load_vision_prompt_template() -> str:
+    prompt_path = Path(__file__).resolve().parent / "prompts" / "mobile_capture_card_prompt.txt"
+    return prompt_path.read_text(encoding="utf-8").strip() + "\n"
 
 
 def _extract_openai_text(response: dict[str, Any]) -> str:

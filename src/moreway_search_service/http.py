@@ -56,6 +56,7 @@ def _build_mobile_result_item(item: dict[str, Any]) -> dict[str, Any]:
         "capturedAt": str(item.get("captured_at") or item.get("created_at") or ""),
         "cardCreatedAt": str(item.get("card_created_at") or ""),
         "captureLocation": capture_location,
+        "captureAddress": str(item.get("capture_address") or "").strip(),
         "tags": [str(tag).strip() for tag in (item.get("tags") or []) if str(tag).strip()],
         "score": item.get("rerank_score"),
         "imageRefs": image_refs,

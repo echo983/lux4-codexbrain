@@ -47,6 +47,10 @@ class SearchHit:
     content_completeness: str
     observation_confidence: str
     namespace_id: str
+    capture_address: str
+    capture_place_id: str
+    capture_location_type: str
+    capture_result_types: list[str]
     capture_location_latitude: float | None
     capture_location_longitude: float | None
 
@@ -239,6 +243,19 @@ def _extract_capture_location_coordinate(metadata: dict[str, Any], frontmatter: 
         return None
 
 
+def _extract_capture_address_field(metadata: dict[str, Any], frontmatter: dict[str, Any], key: str) -> str:
+    return str(metadata.get(key) or frontmatter.get(key) or "").strip()
+
+
+def _extract_capture_result_types(metadata: dict[str, Any], frontmatter: dict[str, Any]) -> list[str]:
+    value = metadata.get("capture_result_types")
+    if not isinstance(value, list):
+        value = frontmatter.get("capture_result_types")
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 def _encode_recent_cursor(card_created_at: str, item_id: str, source_table: str) -> str:
     raw = json.dumps({"card_created_at": card_created_at, "id": item_id, "source_table": source_table}, ensure_ascii=False).encode("utf-8")
     return urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -391,6 +408,12 @@ def search_keep_cards(
                         metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""
                     ),
                     namespace_id=item_namespace_id,
+                    capture_address=_extract_capture_address_field(metadata, frontmatter, "capture_address"),
+                    capture_place_id=_extract_capture_address_field(metadata, frontmatter, "capture_place_id"),
+                    capture_location_type=_extract_capture_address_field(
+                        metadata, frontmatter, "capture_location_type"
+                    ),
+                    capture_result_types=_extract_capture_result_types(metadata, frontmatter),
                     capture_location_latitude=_extract_capture_location_coordinate(
                         metadata, frontmatter, "capture_location_latitude"
                     ),
@@ -476,6 +499,10 @@ def search_keep_cards(
                 "content_completeness": hit.content_completeness,
                 "observation_confidence": hit.observation_confidence,
                 "namespace_id": hit.namespace_id,
+                "capture_address": hit.capture_address,
+                "capture_place_id": hit.capture_place_id,
+                "capture_location_type": hit.capture_location_type,
+                "capture_result_types": hit.capture_result_types,
                 "capture_location_latitude": hit.capture_location_latitude,
                 "capture_location_longitude": hit.capture_location_longitude,
             }
@@ -541,6 +568,12 @@ def fetch_card_by_id(
                 "priority": str(metadata.get("priority") or frontmatter.get("priority") or ""),
                 "keep_md_fid": str(metadata.get("keep_md_fid") or ""),
                 "keep_json_fid": str(metadata.get("keep_json_fid") or ""),
+                "capture_address": _extract_capture_address_field(metadata, frontmatter, "capture_address"),
+                "capture_place_id": _extract_capture_address_field(metadata, frontmatter, "capture_place_id"),
+                "capture_location_type": _extract_capture_address_field(
+                    metadata, frontmatter, "capture_location_type"
+                ),
+                "capture_result_types": _extract_capture_result_types(metadata, frontmatter),
                 "capture_location_latitude": _extract_capture_location_coordinate(
                     metadata, frontmatter, "capture_location_latitude"
                 ),
@@ -657,6 +690,12 @@ def list_recent_cards(
                     "content_completeness": str(metadata.get("content_completeness") or frontmatter.get("content_completeness") or ""),
                     "observation_confidence": str(metadata.get("observation_confidence") or frontmatter.get("observation_confidence") or ""),
                     "namespace_id": item_namespace_id,
+                    "capture_address": _extract_capture_address_field(metadata, frontmatter, "capture_address"),
+                    "capture_place_id": _extract_capture_address_field(metadata, frontmatter, "capture_place_id"),
+                    "capture_location_type": _extract_capture_address_field(
+                        metadata, frontmatter, "capture_location_type"
+                    ),
+                    "capture_result_types": _extract_capture_result_types(metadata, frontmatter),
                     "capture_location_latitude": _extract_capture_location_coordinate(
                         metadata, frontmatter, "capture_location_latitude"
                     ),

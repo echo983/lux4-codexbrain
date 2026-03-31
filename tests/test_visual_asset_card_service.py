@@ -11,13 +11,51 @@ from visual_asset_card_service.http import build_server
 from visual_asset_card_service.config import Config
 from visual_asset_card_service.service import (
     ASSET_CARD_SCHEMA,
+    CaptureAddress,
+    IngestRequest,
     VisualAssetCardService,
+    _build_vision_prompt,
     derive_display_title,
     parse_ingest_request,
 )
 
 
 class VisualAssetCardServiceTests(unittest.TestCase):
+    def test_build_vision_prompt_omits_empty_user_note_and_marks_optional_risk(self) -> None:
+        request_data = IngestRequest(
+            captured_at="2026-03-30T10:34:56Z",
+            group_note="",
+            source_client="android-apk",
+            namespace_id="ns_user_test",
+            capture_location={"latitude": 40.4168, "longitude": -3.7038},
+            images=[],
+        )
+        prompt = _build_vision_prompt(
+            request_data,
+            CaptureAddress(
+                formatted_address="西班牙马德里中心区",
+                place_id="place-1",
+                location_type="ROOFTOP",
+                result_types=["street_address"],
+            ),
+        )
+        self.assertIn("# 唯一性、特征性、标识性信息", prompt)
+        self.assertIn("# 限制与风险（如无显著必要可省略）", prompt)
+        self.assertNotIn("用户备注（高权重）", prompt)
+
+    def test_build_vision_prompt_promotes_user_note_to_high_priority(self) -> None:
+        request_data = IngestRequest(
+            captured_at="2026-03-30T10:34:56Z",
+            group_note="只拍到了右半边",
+            source_client="android-apk",
+            namespace_id="ns_user_test",
+            capture_location=None,
+            images=[],
+        )
+        prompt = _build_vision_prompt(request_data, None)
+        self.assertIn("高权重重视以下用户备注", prompt)
+        self.assertIn("- 用户备注（高权重）：只拍到了右半边", prompt)
+
     def test_derive_display_title_from_subject_section(self) -> None:
         body = "# 这是什么\n一张法文宴会菜单。\n\n# 直接可见信息\n可见日期。\n"
         payload = {
@@ -162,7 +200,7 @@ class VisualAssetCardServiceTests(unittest.TestCase):
         prompt_inputs: list[str] = []
 
         def _capture_prompt(request_data, capture_address):
-            text = "# 这是什么\n餐厅菜单。\n\n# 直接可见信息\n有菜品和价格。\n\n# 关键信息提炼\n适合检索。\n\n# 限制与风险\n只拍到一页。"
+            text = "# 这是什么\n餐厅菜单。\n\n# 直接可见信息\n有菜品和价格。\n\n# 关键信息提炼\n适合检索。\n\n# 唯一性、特征性、标识性信息\n店名与价格组合可唯一识别。\n\n# 限制与风险\n只拍到一页。"
             prompt_inputs.append(
                 f"{request_data.captured_at}|{request_data.group_note}|"
                 f"{capture_address.formatted_address if capture_address else ''}|"

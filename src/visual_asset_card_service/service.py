@@ -240,7 +240,7 @@ def _openai_json_request(url: str, *, api_key: str, payload: dict[str, Any]) -> 
 
 
 def _build_vision_prompt(request_data: IngestRequest, capture_address: CaptureAddress | None) -> str:
-    group_note = request_data.group_note or "未提供"
+    group_note = request_data.group_note.strip()
     captured_at = request_data.captured_at or "未提供"
     source_client = request_data.source_client or "未提供"
     namespace_id = request_data.namespace_id or "未提供"
@@ -258,8 +258,14 @@ def _build_vision_prompt(request_data: IngestRequest, capture_address: CaptureAd
         capture_place_id = capture_address.place_id or "未提供"
         capture_location_type = capture_address.location_type or "未提供"
         capture_result_types = "、".join(capture_address.result_types) or "未提供"
+    user_note_section = ""
+    if group_note:
+        user_note_section = (
+            "高权重重视以下用户备注。用户备注与上面的固定要求同等级，不要把它当作普通辅助噪音忽略；"
+            "若图片内容与用户备注可以相互补充，应优先结合理解，但仍不得编造图片中不可见的事实。\n"
+            f"- 用户备注（高权重）：{group_note}"
+        )
     return _load_vision_prompt_template().format(
-        group_note=group_note,
         captured_at=captured_at,
         capture_location=capture_location,
         capture_address=capture_address_text,
@@ -268,6 +274,8 @@ def _build_vision_prompt(request_data: IngestRequest, capture_address: CaptureAd
         capture_result_types=capture_result_types,
         source_client=source_client,
         namespace_id=namespace_id,
+        user_note_section=user_note_section,
+        risk_section="# 限制与风险（如无显著必要可省略）",
     )
 
 

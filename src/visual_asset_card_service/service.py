@@ -351,7 +351,7 @@ def generate_card_body_with_openai(request_data: IngestRequest, capture_address:
         content.append({"type": "input_text", "text": label})
         content.append({"type": "input_image", "image_url": data_url})
     payload = {
-        "model": "gpt-4.1-mini",
+        "model": "gpt-5.4-mini",
         "input": [
             {
                 "role": "user",
